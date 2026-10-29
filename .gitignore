@@ -1,0 +1,5 @@
+# Built zips (attach them to a GitHub Release instead)
+dist/
+
+# Local notes for Claude Code: machine paths and research, not for players
+CLAUDE.md
