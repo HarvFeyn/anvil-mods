@@ -5,8 +5,13 @@ Small client-side mods for **Anvil Empires**, made with
 
 > Unofficial and not affiliated with Siege Camp. These mods only change
 > what your own screen shows: they never change what the game sends to
-> the server. UE4SS still injects itself into the game, so use them at
-> your own risk, and check the developers' rules on mods first.
+> the server. They run on UE4SS, an external tool: please use it only to
+> run mods like these, never to gain an advantage over other players. Use
+> them at your own risk, and check the developers' rules on mods first.
+>
+> **To the Anvil Empires developers:** if you think any of these mods is a
+> problem, please [open an issue](../../issues) or contact me, and I will
+> take it down right away.
 
 ## Mods
 
