@@ -23,47 +23,50 @@ All releases and their changes: [Releases](../../releases).
 
 ## Installation
 
-### 1. Install UE4SS (once)
-
-1. Download UE4SS from its
-   [experimental-latest release](https://github.com/UE4SS-RE/RE-UE4SS/releases/tag/experimental-latest):
-   take the `UE4SS_v3.x.x-….zip` file (not the `zDEV` one).
-   Tested with `UE4SS_v3.0.1-1181-g83330635`.
+1. Download **[AnvilMods-Pack.zip](../../releases/latest/download/AnvilMods-Pack.zip)**.
+   It holds the official UE4SS loader (`UE4SS_v3.0.1-1181-g83330635`) and
+   all the mods above, and nothing else: UE4SS's debug window is off, and
+   its cheat, console and dump mods are left out.
 2. Open the game's folder: in Steam, right-click the game → **Manage** →
    **Browse local files**. Then go to `Anvil\Binaries\Win64\` (the folder
    with `Anvil-Win64-Shipping.exe`).
-3. Extract the UE4SS zip there. You should get:
+3. Extract the zip there. You should get:
 
    ```
    Win64\
    ├── Anvil-Win64-Shipping.exe
    ├── dwmapi.dll
    └── ue4ss\
+       ├── UE4SS.dll
+       └── Mods\
+           ├── AvatarSort\
+           └── shared\
    ```
 
-4. Recommended: open `ue4ss\UE4SS-settings.ini` and set
-   `GuiConsoleEnabled = 0` and `ConsoleEnabled = 0`, so UE4SS does not
-   open its debug windows next to the game.
-
-### 2. Install a mod
-
-1. Download the mod's zip from the table above.
-2. Extract it into `Win64\ue4ss\Mods\`. You should get, for example,
-   `ue4ss\Mods\AvatarSort\enabled.txt` and `ue4ss\Mods\AvatarSort\Scripts\main.lua`.
-3. Start the game.
+4. Start the game.
 
 To check that a mod is running, open `ue4ss\UE4SS.log`: it should contain
-a line such as `[AvatarSort] v0.1.0 loaded`.
+a line such as `[AvatarSort] v0.1.1 loaded`.
+
+### Already using UE4SS?
+
+Do not extract the pack: it would replace your UE4SS settings. Take each
+mod's zip from the table above and extract it into `ue4ss\Mods\`. Mods are
+tested with the UE4SS version named above only.
+
+The full UE4SS release enables `CheatManagerEnablerMod` and
+`ConsoleEnablerMod` by default. Before playing online, set them to `0` in
+`ue4ss\Mods\mods.txt` or delete their folders in `ue4ss\Mods\`.
 
 ### Update a mod
 
-Delete the mod's folder in `ue4ss\Mods\`, then install the new zip.
+Download the mod's zip from the table above, delete the mod's folder in
+`ue4ss\Mods\`, then extract the zip there.
 
 ### Uninstall
 
 - One mod: delete its folder in `ue4ss\Mods\`.
-- Everything: delete `dwmapi.dll` in `Win64\`. Nothing from UE4SS loads
-  without it; you can also delete the `ue4ss` folder.
+- Everything: delete `dwmapi.dll` and the `ue4ss` folder in `Win64\`.
 
 ## Game updates
 
@@ -73,4 +76,5 @@ mod and check for a new release.
 
 ## License
 
-[MIT](LICENSE).
+[MIT](LICENSE). UE4SS is made by its own authors and has its own MIT
+license, included in the pack as `ue4ss\LICENSE`.

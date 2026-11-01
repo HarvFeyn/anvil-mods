@@ -16,7 +16,7 @@
 local UEHelpers = require("UEHelpers")
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.1.0"
+local Version = "0.1.1"
 
 local function Log(Format, ...)
     print("[AvatarSort] " .. string.format(Format, ...) .. "\n")
@@ -275,6 +275,8 @@ local function UpdateTileLabel(Tile, Values)
         LabelSlot:SetVerticalAlignment(VAlignCenter)
         LabelSlot:SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = 0 })
         TileLabels[Tile:GetAddress()] = Label
+        -- A freed label's address can come back: forget what it showed.
+        LabelTexts[Label:GetAddress()] = nil
     end
     -- No label on auxiliaries: always 1/1, and the stack count is enough.
     local Shown = Values and not IsAuxiliary(Values)
@@ -355,7 +357,16 @@ local function ForEachStorage(Callback)
     end
 end
 
+-- Defined with the poll loop below; keeps that loop alive.
+local EnsurePollLoop
+
+-- A callback handed to the game thread or to a delay can be lost (seen once
+-- in a long session: the poll stopped for good, with no error). Anything
+-- waiting on one gives up after this long.
+local StallSeconds = 3
+
 local function SortAll()
+    EnsurePollLoop()
     ForEachStorage(function(Storage)
         local Ok, Error = pcall(SortStorage, Storage)
         if not Ok then Log("sort failed on %s: %s", Storage:GetFullName(), tostring(Error)) end
@@ -366,14 +377,15 @@ end
 -- may fill their texts a little later: sort the whole batch a few times
 -- after the last tile appears. Sorting again changes nothing once in order.
 local SortDelays = { 150, 600, 1500 }
-local SortPending = false
+local SortPendingAt = nil
 local function ScheduleSort()
-    if SortPending then return end
-    SortPending = true
+    local Delayed = SortDelays[#SortDelays] / 1000
+    if SortPendingAt and os.time() - SortPendingAt < Delayed + StallSeconds then return end
+    SortPendingAt = os.time()
     for Index, Delay in ipairs(SortDelays) do
         ExecuteWithDelay(Delay, function()
             ExecuteInGameThread(function()
-                if Index == #SortDelays then SortPending = false end
+                if Index == #SortDelays then SortPendingAt = nil end
                 SortAll()
             end)
         end)
@@ -552,7 +564,7 @@ end)
 
 -- A click is a press followed by a release with the mouse still over the
 -- button. Polled every 30 ms, only while at least one bar exists.
-local PollQueued = false
+local PollQueuedAt = nil
 local function PollButtons()
     for Address, Entry in pairs(Bars) do
         if not Entry.Bar:IsValid() then
@@ -609,24 +621,45 @@ local function WatchLayouts()
 end
 
 local function PollUi()
-    PollQueued = false
+    PollQueuedAt = nil
     WatchLayouts()
     PollButtons()
 end
 
-LoopAsync(30, function()
-    if not PollQueued and (next(Bars) ~= nil or next(Layouts) ~= nil) then
-        PollQueued = true
-        ExecuteInGameThread(function()
-            local Ok, Error = pcall(PollUi)
-            if not Ok then
-                PollQueued = false
-                Log("poll error: %s", tostring(Error))
-            end
-        end)
+local function PollTick()
+    if next(Bars) == nil and next(Layouts) == nil then return end
+    if PollQueuedAt then
+        if os.time() - PollQueuedAt < StallSeconds then return end
+        Log("poll callback was lost, queueing it again")
     end
-    return false
-end)
+    PollQueuedAt = os.time()
+    ExecuteInGameThread(function()
+        local Ok, Error = pcall(PollUi)
+        if not Ok then
+            PollQueuedAt = nil
+            Log("poll error: %s", tostring(Error))
+        end
+    end)
+end
+
+local LastLoopTick = nil
+local function StartPollLoop()
+    LastLoopTick = os.time()
+    LoopAsync(30, function()
+        LastLoopTick = os.time()
+        local Ok, Error = pcall(PollTick)
+        if not Ok then Log("poll loop error: %s", tostring(Error)) end
+        return false
+    end)
+end
+
+EnsurePollLoop = function()
+    if os.time() - LastLoopTick < StallSeconds then return end
+    Log("poll loop had stopped, starting it again")
+    StartPollLoop()
+end
+
+StartPollLoop()
 
 ------------------------------------------------------------------------
 -- Probe (Ctrl+F8): logs what can be read, to settle in a test session
