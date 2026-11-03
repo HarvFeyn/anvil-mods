@@ -52,6 +52,7 @@ try {
         if (-not (Test-Path (Join-Path $Mod.FullName 'enabled.txt'))) {
             throw "$($Mod.Name) has no enabled.txt: players would get a mod that never starts"
         }
+        & (Join-Path $PSScriptRoot 'check-modinfo.ps1') $Mod.FullName
         foreach ($File in Get-ChildItem -Recurse -File $Mod.FullName) {
             $Relative = $File.FullName.Substring($Mod.Parent.FullName.Length + 1).Replace('\', '/')
             [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($Pack, $File.FullName, "ue4ss/Mods/$Relative") | Out-Null

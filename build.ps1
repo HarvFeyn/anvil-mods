@@ -15,6 +15,7 @@ foreach ($Mod in $Mods) {
     if (-not (Test-Path (Join-Path $Mod.FullName 'enabled.txt'))) {
         throw "$($Mod.Name) has no enabled.txt: players would get a mod that never starts"
     }
+    & (Join-Path $PSScriptRoot 'check-modinfo.ps1') $Mod.FullName
 
     $ZipPath = Join-Path $Dist "$($Mod.Name).zip"
     if (Test-Path $ZipPath) { Remove-Item -Force $ZipPath }
