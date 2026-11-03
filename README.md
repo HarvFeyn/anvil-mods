@@ -19,6 +19,7 @@ Small client-side mods for **Anvil Empires**, made with
 |-----|--------------|----------|
 | [AvatarSort](AvatarSort/README.md) | Sorts avatar lists by level or by skill, and shows each avatar's value/max on its tile | [AvatarSort.zip](../../releases/latest/download/AvatarSort.zip) |
 | [ModManager](ModManager/README.md) | Adds a Mods button to the main menu to turn these mods on or off and see their versions | [ModManager.zip](../../releases/latest/download/ModManager.zip) |
+| [MapFilter](MapFilter/README.md) | Adds an Icons button to the map to show or hide each kind of icon on the map and the compass | [MapFilter.zip](../../releases/latest/download/MapFilter.zip) |
 
 All releases and their changes: [Releases](../../releases).
 
@@ -41,6 +42,7 @@ All releases and their changes: [Releases](../../releases).
        ├── UE4SS.dll
        └── Mods\
            ├── AvatarSort\
+           ├── MapFilter\
            ├── ModManager\
            └── shared\
    ```
