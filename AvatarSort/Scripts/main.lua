@@ -5,18 +5,20 @@
     by changing their row and column. It never creates, removes or clicks a
     tile, and never calls anything that talks to the server.
 
-    A row of sort buttons is added above each avatar grid.
+    A row of sort buttons is added above each avatar grid, with a "Rested"
+    check box that hides the avatars not at full health and stamina.
 
     Keys (game window focused):
       Ctrl+F6  next sort mode (Level, then each skill)
-      Ctrl+F7  open / close the test bench (works from the main menu)
+      Ctrl+F7  test bench (works from the main menu): 6 columns like the
+               deployment pop-up, then 4 like the caravan, then closed
       Ctrl+F8  probe: log what the mod can read from every open avatar grid
 --]]
 
 local UEHelpers = require("UEHelpers")
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.1.1"
+local Version = "0.2.0"
 
 local function Log(Format, ...)
     print("[AvatarSort] " .. string.format(Format, ...) .. "\n")
@@ -26,25 +28,44 @@ end
 -- (EAnvilAvatarAttributeType). Cooking (6) is not used by the game yet:
 -- it is left out on purpose and never counts in the level.
 local Skills = {
-    { Index = 0, Name = "Fitness",       Short = "Fit", Text = "FitnessNumberText" },
-    { Index = 1, Name = "MeleeCombat",   Short = "Mel", Text = "MeleeCombatNumberText" },
-    { Index = 2, Name = "RangedCombat",  Short = "Rng", Text = "RangedCombatNumberText" },
-    { Index = 3, Name = "Blacksmithing", Short = "Smi", Text = "BlacksmithingNumberText" },
-    { Index = 4, Name = "LoggingMining", Short = "Log", Text = "LoggingMiningNumberText" },
-    { Index = 5, Name = "Hunting",       Short = "Hun", Text = "HuntingNumberText" },
+    { Index = 0, Name = "Fitness",       Short = "Fitness", Text = "FitnessNumberText" },
+    { Index = 1, Name = "MeleeCombat",   Short = "Melee", Text = "MeleeCombatNumberText" },
+    { Index = 2, Name = "RangedCombat",  Short = "Ranged", Text = "RangedCombatNumberText" },
+    { Index = 3, Name = "Blacksmithing", Short = "Smith", Text = "BlacksmithingNumberText" },
+    { Index = 4, Name = "LoggingMining", Short = "Logging", Text = "LoggingMiningNumberText" },
+    { Index = 5, Name = "Hunting",       Short = "Hunting", Text = "HuntingNumberText" },
 }
 
 -- Sort modes, in the order Ctrl+F6 cycles through them and the buttons
 -- are shown. "Level" is the sum of the six skills.
 local Modes = { "Level" }
-local ModeLabels = { Level = "Lvl" }
-local ModeTooltips = { Level = "Sort by level (sum of skills)" }
+local ModeLabels = { Level = "All" }
+-- Tooltip of each button, in the game's tooltip style (see AddSortBar).
+local SkillTitles = {
+    Fitness = "Fitness", MeleeCombat = "Melee Combat", RangedCombat = "Ranged Combat",
+    Blacksmithing = "Blacksmithing", LoggingMining = "Logging & Mining", Hunting = "Hunting",
+}
+local ModeTooltips = {
+    Level = {
+        Header = "All skills",
+        Body = "Sorts avatars by overall level, highest first: the sum of their six skills. Each tile shows this total over the highest total the avatar can reach.",
+    },
+}
 for _, Skill in ipairs(Skills) do
     Modes[#Modes + 1] = Skill.Name
     ModeLabels[Skill.Name] = Skill.Short
-    ModeTooltips[Skill.Name] = "Sort by " .. Skill.Name
+    ModeTooltips[Skill.Name] = {
+        Header = SkillTitles[Skill.Name],
+        Body = "Sorts avatars by " .. SkillTitles[Skill.Name] .. ", highest first. Each tile shows the avatar's current level over its maximum.",
+    }
 end
 local CurrentMode = 1
+-- "Rested" filter: when on, only fully rested avatars are shown.
+local RestedOnly = false
+local RestedTooltip = {
+    Header = "Fully rested",
+    Body = "Shows only avatars at full health and full stamina. Auxiliaries are always shown.",
+}
 
 local StorageWidgetClass = "/Script/Anvil.AvatarStorageWidget"
 local ProfileWidgetClass = "/Script/Anvil.AvatarProfileWidget"
@@ -53,10 +74,13 @@ local StorageWidgetBPClass = StorageWidgetAsset .. ".BPAvatarStorageWidget_C"
 
 -- Fake skills for the test bench, keyed by tile address.
 local FakeSkills = {}
+-- Fake rested state for the test bench, keyed by tile address.
+local FakeRested = {}
 -- Game order of each tile (row * 1000 + column) the first time we saw it,
 -- keyed by tile address. Breaks ties so equal tiles keep the game's order.
 local GameOrder = {}
 local TestBench = nil
+local TestBenchColumns = nil
 
 ------------------------------------------------------------------------
 -- Reading skills
@@ -88,6 +112,11 @@ end
 -- Verified in game: the texts are filled when the window opens, no hover
 -- needed. Returns nil for an empty cell.
 local function ReadSkillsFromTooltip(Tile)
+    -- The game empties a cell by hiding its image and name (probe,
+    -- 2026-11-03), not its tooltip: when an avatar leaves the list (killed,
+    -- awaiting ransom), its cell keeps the old skills. Trust the image.
+    local Ok, Visibility = pcall(function() return Tile.ProfileImage:GetVisibility() end)
+    if Ok and (Visibility == 1 or Visibility == 2) then return nil end -- Collapsed, Hidden
     local Tooltip = Tile.AvatarTooltipWidget
     if not Tooltip or not Tooltip:IsValid() then return nil end
     local Details = Tooltip.AvatarProfileDetailsWidget
@@ -107,6 +136,28 @@ end
 -- or nil when unknown.
 local function ReadSkills(Tile)
     return FakeSkills[Tile:GetAddress()] or ReadSkillsFromTooltip(Tile)
+end
+
+-- Full health and full stamina, read from the tooltip's vitality bars
+-- (StatBar.MainBar, a ProgressBar from 0 to 1). Returns true, false, or nil
+-- when the bars cannot be read.
+local function ReadBarPercent(Bar)
+    local Ok, Percent = pcall(function() return Bar.MainBar.Percent end)
+    if Ok and type(Percent) == "number" then return Percent end
+    return nil
+end
+
+local function ReadRested(Tile)
+    local Fake = FakeRested[Tile:GetAddress()]
+    if Fake ~= nil then return Fake end
+    local Ok, Vitality = pcall(function()
+        return Tile.AvatarTooltipWidget.AvatarProfileDetailsWidget.VitalityStatus
+    end)
+    if not Ok or not Vitality or not Vitality:IsValid() then return nil end
+    local Health = ReadBarPercent(Vitality.HealthBar)
+    local Stamina = ReadBarPercent(Vitality.StaminaBar)
+    if Health == nil or Stamina == nil then return nil end
+    return Health >= 0.995 and Stamina >= 0.995
 end
 
 -- Sum of the six skills, and of their maximums (nil if one is unknown).
@@ -173,26 +224,81 @@ end
 ------------------------------------------------------------------------
 
 local HAlignLeft, VAlignTop, VAlignCenter, HAlignCenter = 1, 1, 2, 2
-local ButtonWidth, ButtonHeight = 31, 20
+local ButtonWidth, ButtonHeight = 46, 22
+-- Label size compared with the tile name font.
+local LabelFontScale = 1.15
 local ActiveColor = { R = 1.0, G = 0.8, B = 0.45, A = 1.0 }
 local InactiveColor = { R = 0.55, G = 0.55, B = 0.55, A = 1.0 }
 
--- Bars[storage address] = { Bar = HorizontalBox, Buttons = { { Button, Mode, WasPressed } } }
+-- The Rested filter is a check box drawn with the game's own textures.
+local CheckBoxFolder = "/Game/Textures/UI/"
+local CheckBoxTextures = { Unchecked = "CheckboxEmpty", Checked = "CheckboxChecked" }
+local CheckBoxSize = 14
+local CheckBoxLabelColor = { R = 0.8, G = 0.8, B = 0.8, A = 1.0 }
+
+-- Bars[storage address] = { Bar = WrapBox, Buttons = { { Button, Mode, WasPressed } },
+--   Check = CheckBox, CheckLabel = TextBlock }
 local Bars = {}
 
 local function NewWidget(ClassName, Outer)
     return StaticConstructObject(StaticFindObject("/Script/UMG." .. ClassName), Outer)
 end
 
+-- Finds an asset's object, loading the asset if needed. Nil if missing.
+local function LoadObject(Folder, Name)
+    local Path = Folder .. Name .. "." .. Name
+    local Object = StaticFindObject(Path)
+    if not Object or not Object:IsValid() then
+        LoadAsset(Folder .. Name)
+        Object = StaticFindObject(Path)
+    end
+    if Object and Object:IsValid() then return Object end
+    return nil
+end
+
 local function RefreshButtonColors()
     for Address, Entry in pairs(Bars) do
         if Entry.Bar:IsValid() then
             for _, Item in ipairs(Entry.Buttons) do
-                Item.Button:SetBackgroundColor(Item.Mode == CurrentMode and ActiveColor or InactiveColor)
+                local Active = Item.Mode == CurrentMode
+                Item.Button:SetBackgroundColor(Active and ActiveColor or InactiveColor)
             end
+            if Entry.Check:IsChecked() ~= RestedOnly then Entry.Check:SetIsChecked(RestedOnly) end
+            Entry.CheckLabel:SetColorAndOpacity({
+                SpecifiedColor = RestedOnly and ActiveColor or CheckBoxLabelColor, ColorUseRule = 0,
+            })
         else
             Bars[Address] = nil
         end
+    end
+end
+
+local TooltipAsset = "/Game/UI/Gameplay/BPTooltipWidget"
+local TooltipClass = TooltipAsset .. ".BPTooltipWidget_C"
+local SlateCollapsed = 1
+
+-- Gives a button the game's own tooltip (BPTooltipWidget: header and
+-- body; its gold footer is hidden), or a plain text tooltip if that widget cannot be made.
+local function SetTooltip(Button, Help)
+    local Ok, Error = pcall(function()
+        local Class = StaticFindObject(TooltipClass)
+        if not Class or not Class:IsValid() then
+            LoadAsset(TooltipAsset)
+            Class = StaticFindObject(TooltipClass)
+        end
+        local PlayerController = UEHelpers.GetPlayerController()
+        local Library = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
+        local Tooltip = Library:Create(PlayerController, Class, PlayerController)
+        Tooltip.HeaderText:SetText(FText(Help.Header))
+        Tooltip.BodyText:SetText(FText(Help.Body))
+        for _, Unused in ipairs({ "BodyExtraText", "FooterText", "ResourceBar", "ResourcesContainer", "ResourcesFooterText" }) do
+            pcall(function() Tooltip[Unused]:SetVisibility(SlateCollapsed) end)
+        end
+        Button:SetToolTip(Tooltip)
+    end)
+    if not Ok then
+        Log("game tooltip not available (%s), using plain text", tostring(Error))
+        Button:SetToolTipText(FText(Help.Header .. ": " .. Help.Body))
     end
 end
 
@@ -211,31 +317,99 @@ local function AddSortBar(Storage, StyleTile)
     if not ScrollBox:IsValid() or HasBar(Storage, ScrollBox) then return end
 
     local Tree = Storage.WidgetTree
-    local Bar = NewWidget("HorizontalBox", Tree)
+    -- A wrap box: in narrow windows (4 columns) the buttons go on two rows.
+    local Bar = NewWidget("WrapBox", Tree)
+    -- Wrap at the grid's width (62 px tiles, 2 px padding on each side):
+    -- the scroll box would otherwise let the row grow as wide as it likes.
+    local Columns = Storage.PreferredNumColumns > 0 and Storage.PreferredNumColumns or 6
+    pcall(function()
+        Bar.WrapSize = Columns * 66
+        Bar.bExplicitWrapSize = true
+    end)
     local Buttons = {}
 
+    -- Copy the font first: NameText.Font is the tile's live struct.
+    local function NewLabel(Text)
+        local Label = NewWidget("TextBlock", Tree)
+        pcall(function()
+            local Font = StyleTile.NameText.Font
+            Label:SetFont({
+                FontObject = Font.FontObject,
+                FontMaterial = Font.FontMaterial,
+                TypefaceFontName = Font.TypefaceFontName,
+                Size = math.floor(Font.Size * LabelFontScale + 0.5),
+                LetterSpacing = Font.LetterSpacing,
+            })
+        end)
+        Label:SetText(FText(Text))
+        return Label
+    end
+
+    local Entries = {}
     for Mode, Name in ipairs(Modes) do
+        Entries[#Entries + 1] = { Mode = Mode, Label = ModeLabels[Name], Help = ModeTooltips[Name] }
+    end
+
+    for _, Entry in ipairs(Entries) do
         local Box = NewWidget("SizeBox", Tree)
         Box:SetWidthOverride(ButtonWidth)
         Box:SetHeightOverride(ButtonHeight)
 
         local Button = NewWidget("Button", Tree)
         pcall(function() Button:SetStyle(StyleTile.ProfileButton.WidgetStyle) end)
-        Button:SetToolTipText(FText(ModeTooltips[Name]))
+        SetTooltip(Button, Entry.Help)
         Box:AddChild(Button)
 
-        local Label = NewWidget("TextBlock", Tree)
-        pcall(function() Label:SetFont(StyleTile.NameText.Font) end)
-        Label:SetText(FText(ModeLabels[Name]))
+        local Label = NewLabel(Entry.Label)
         local LabelSlot = Button:AddChild(Label)
         LabelSlot:SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = 0 })
         LabelSlot:SetHorizontalAlignment(HAlignCenter)
         LabelSlot:SetVerticalAlignment(VAlignCenter)
 
-        local BoxSlot = Bar:AddChildToHorizontalBox(Box)
-        BoxSlot:SetPadding({ Left = 0, Top = 0, Right = 2, Bottom = 0 })
-        Buttons[#Buttons + 1] = { Button = Button, Mode = Mode, WasPressed = false }
+        local BoxSlot = Bar:AddChildToWrapBox(Box)
+        BoxSlot:SetPadding({ Left = 0, Top = 0, Right = 2, Bottom = 2 })
+        Buttons[#Buttons + 1] = { Button = Button, Mode = Entry.Mode, WasPressed = false }
     end
+
+    -- The Rested filter: a check box with its label as content, so a click
+    -- on the text toggles it too. It toggles itself; PollButtons notices.
+    local Check = NewWidget("CheckBox", Tree)
+    local Ok, Error = pcall(function()
+        local Unchecked = LoadObject(CheckBoxFolder, CheckBoxTextures.Unchecked)
+        local Checked = LoadObject(CheckBoxFolder, CheckBoxTextures.Checked)
+        if not Unchecked or not Checked then error("textures not found") end
+        local Style = Check.WidgetStyle
+        local function SetBrush(Field, Texture, Brightness)
+            local Brush = Style[Field]
+            Brush.ResourceObject = Texture
+            Brush.ImageSize = { X = CheckBoxSize, Y = CheckBoxSize }
+            Brush.DrawAs = 3 -- Image
+            Brush.TintColor = {
+                SpecifiedColor = { R = Brightness, G = Brightness, B = Brightness, A = 1.0 }, ColorUseRule = 0,
+            }
+        end
+        SetBrush("UncheckedImage", Unchecked, 0.85)
+        SetBrush("UncheckedHoveredImage", Unchecked, 1.0)
+        SetBrush("UncheckedPressedImage", Unchecked, 0.7)
+        SetBrush("CheckedImage", Checked, 0.85)
+        SetBrush("CheckedHoveredImage", Checked, 1.0)
+        SetBrush("CheckedPressedImage", Checked, 0.7)
+    end)
+    if not Ok then Log("game check box textures not used (%s)", tostring(Error)) end
+    SetTooltip(Check, RestedTooltip)
+    local CheckLabel = NewLabel("Rested")
+    local CheckLabelSlot = Check:SetContent(CheckLabel)
+    pcall(function()
+        CheckLabelSlot:SetPadding({ Left = 3, Top = 0, Right = 0, Bottom = 0 })
+        CheckLabelSlot:SetVerticalAlignment(VAlignCenter)
+    end)
+    Check:SetIsChecked(RestedOnly)
+    local CheckBox = NewWidget("SizeBox", Tree)
+    CheckBox:SetHeightOverride(ButtonHeight)
+    CheckBox:AddChild(Check)
+    local CheckSlot = Bar:AddChildToWrapBox(CheckBox)
+    -- A little apart from the sort buttons: it is a setting, not a sort.
+    CheckSlot:SetPadding({ Left = 4, Top = 0, Right = 2, Bottom = 2 })
 
     -- The scroll box can only append: take the grid out, add the bar,
     -- then put the grid back under it. The tiles stay in the grid.
@@ -248,7 +422,7 @@ local function AddSortBar(Storage, StyleTile)
     GridSlot:SetHorizontalAlignment(HAlignLeft)
     GridSlot:SetVerticalAlignment(VAlignTop)
 
-    Bars[Storage:GetAddress()] = { Bar = Bar, Buttons = Buttons }
+    Bars[Storage:GetAddress()] = { Bar = Bar, Buttons = Buttons, Check = Check, CheckLabel = CheckLabel }
     RefreshButtonColors()
 end
 
@@ -287,6 +461,25 @@ local function UpdateTileLabel(Tile, Values)
     end
 end
 
+-- Tiles the Rested filter collapsed: HiddenTiles[tile address] = { Tile,
+-- Visibility } with the visibility to give back.
+local HiddenTiles = {}
+
+local function SetTileHidden(Tile, Hidden)
+    local Address = Tile:GetAddress()
+    local Entry = HiddenTiles[Address]
+    if Hidden then
+        if not (Entry and Entry.Tile:IsValid()) then
+            HiddenTiles[Address] = { Tile = Tile, Visibility = Tile:GetVisibility() }
+        end
+        -- Checked on every sort: the game may show the tile again.
+        if Tile:GetVisibility() ~= SlateCollapsed then Tile:SetVisibility(SlateCollapsed) end
+    elseif not Hidden and Entry then
+        if Entry.Tile:IsValid() then Tile:SetVisibility(Entry.Visibility) end
+        HiddenTiles[Address] = nil
+    end
+end
+
 -- Layouts[storage address] = { Storage, Count, Items = { { Slot, Row, Column } } }:
 -- where the mod last put each tile, to notice when the game moves them back.
 local Layouts = {}
@@ -306,10 +499,16 @@ local function SortStorage(Storage)
         local Values = ReadSkills(Tile)
         local LabelOk, LabelError = pcall(UpdateTileLabel, Tile, Values)
         if not LabelOk then Log("tile label failed: %s", tostring(LabelError)) end
+        local Auxiliary = IsAuxiliary(Values)
+        -- Only named avatars are filtered: never auxiliaries or empty cells,
+        -- nor an avatar whose bars cannot be read.
+        local Hidden = RestedOnly and Values ~= nil and not Auxiliary and ReadRested(Tile) == false
+        SetTileHidden(Tile, Hidden)
         Entries[#Entries + 1] = {
             Slot = Slot,
             Order = GameOrder[Address],
-            Auxiliary = IsAuxiliary(Values),
+            Auxiliary = Auxiliary,
+            Hidden = Hidden,
             Key = SortKey(Values),
         }
     end)
@@ -320,7 +519,10 @@ local function SortStorage(Storage)
         NumColumns = math.max(NumColumns, Storage.PreferredNumColumns)
     end
 
+    -- Hidden tiles go after everything, empty cells included, so the shown
+    -- avatars stay together at the top.
     table.sort(Entries, function(A, B)
+        if A.Hidden ~= B.Hidden then return B.Hidden end
         if A.Auxiliary ~= B.Auxiliary then return A.Auxiliary end
         if A.Key ~= B.Key then
             if A.Key == nil then return false end
@@ -412,14 +614,7 @@ local FallbackIcons = {
 }
 
 local function LoadTexture(Name)
-    local Path = IconFolder .. Name .. "." .. Name
-    local Texture = StaticFindObject(Path)
-    if not Texture or not Texture:IsValid() then
-        LoadAsset(IconFolder .. Name)
-        Texture = StaticFindObject(Path)
-    end
-    if Texture and Texture:IsValid() then return Texture end
-    return nil
+    return LoadObject(IconFolder, Name)
 end
 
 -- Returns { Male = { [skill index] = texture }, Female = { ... } }.
@@ -454,7 +649,7 @@ local function DominantSkill(Values)
     return Best
 end
 
-local function OpenTestBench()
+local function OpenTestBench(Columns)
     local Class = StaticFindObject(StorageWidgetBPClass)
     if not Class or not Class:IsValid() then
         LoadAsset(StorageWidgetAsset)
@@ -477,8 +672,11 @@ local function OpenTestBench()
         Log("test bench: widget creation failed")
         return
     end
+    -- Same column count as the window it stands for.
+    pcall(function() Widget.PreferredNumColumns = Columns end)
     Widget:AddToViewport(100)
     TestBench = Widget
+    TestBenchColumns = Columns
 
     -- Distinct names make it easy to follow each tile when it moves.
     local Names = { "Aldric", "Brenna", "Cedric", "Dagny", "Edwin",
@@ -512,6 +710,7 @@ local function OpenTestBench()
             Name, Texture = Names[(Count - 1) % #Names + 1], Set[DominantSkill(Values)]
         end
         FakeSkills[Tile:GetAddress()] = Values
+        if Count ~= AuxiliaryTile then FakeRested[Tile:GetAddress()] = math.random(2) == 1 end
 
         if Tile.NameText:IsValid() then Tile.NameText:SetText(FText(Name)) end
         if Texture and Tile.ProfileImage:IsValid() then
@@ -523,7 +722,7 @@ local function OpenTestBench()
         end
         if Stack and Tile.StackSizeText:IsValid() then Tile.StackSizeText:SetText(FText(Stack)) end
     end)
-    Log("test bench open: %d tiles with fake skills, mode %s", Count, Modes[CurrentMode])
+    Log("test bench open: %d columns, %d tiles with fake skills, mode %s", Columns, Count, Modes[CurrentMode])
 
     SortStorage(Widget)
 end
@@ -532,13 +731,22 @@ local function CloseTestBench()
     if TestBench and TestBench:IsValid() then TestBench:RemoveFromParent() end
     TestBench = nil
     FakeSkills = {}
+    FakeRested = {}
     Log("test bench closed")
 end
 
 RegisterKeyBind(Key.F7, { ModifierKey.CONTROL }, function()
     ExecuteInGameThread(function()
         local Ok, Error = pcall(function()
-            if TestBench and TestBench:IsValid() then CloseTestBench() else OpenTestBench() end
+            -- Closed, then 6 columns (deployment), 4 columns (caravan), closed.
+            local Open = TestBench and TestBench:IsValid()
+            local Columns = Open and TestBenchColumns
+            if Open then CloseTestBench() end
+            if not Open then
+                OpenTestBench(6)
+            elseif Columns == 6 then
+                OpenTestBench(4)
+            end
         end)
         if not Ok then Log("test bench error: %s", tostring(Error)) end
     end)
@@ -549,6 +757,13 @@ end)
 ------------------------------------------------------------------------
 
 -- Must run on the game thread.
+local function SetRestedOnly(On)
+    RestedOnly = On
+    Log("rested filter: %s", On and "on" or "off")
+    RefreshButtonColors()
+    SortAll()
+end
+
 local function SetMode(Mode)
     CurrentMode = Mode
     Log("sort mode: %s", Modes[CurrentMode])
@@ -578,6 +793,11 @@ local function PollButtons()
                     return
                 end
                 Item.WasPressed = Pressed
+            end
+            local Checked = Entry.Check:IsChecked()
+            if Checked ~= RestedOnly then
+                SetRestedOnly(Checked)
+                return
             end
         end
     end
@@ -673,6 +893,35 @@ end
 local function ProbeTile(Tile, Slot)
     Log("  tile %s at row %d col %d, address 0x%X", Tile:GetFName():ToString(), Slot.Row, Slot.Column, Tile:GetAddress())
     Log("    name '%s', stack '%s'", TextOf(Tile.NameText), TextOf(Tile.StackSizeText))
+    -- How the game draws the tile: a greyed tile (seen after an avatar died)
+    -- may be disabled, faded, or have its parts hidden.
+    local Looks = {}
+    for _, Part in ipairs({ "Self", "ProfileButton", "ProfileImage", "NameText", "OwnerTypeIcon" }) do
+        local Widget = Part == "Self" and Tile or Tile[Part]
+        local Ok, Text = pcall(function()
+            return string.format("%s vis %d enabled %s opacity %.2f", Part, Widget:GetVisibility(),
+                tostring(Widget:GetIsEnabled()), Widget:GetRenderOpacity())
+        end)
+        Looks[#Looks + 1] = Ok and Text or (Part .. " ?")
+    end
+    pcall(function()
+        local Resource = Tile.ProfileImage.Brush.ResourceObject
+        Looks[#Looks + 1] = "image " .. (Resource:IsValid() and Resource:GetFName():ToString() or "none")
+    end)
+    -- Since the November 2026 patch the tile has DisableEmptyColor and
+    -- DisableInaccessibleColor (a dead avatar awaiting ransom?): log the
+    -- colours the game set, to see which part it tints.
+    local function ColorText(C)
+        return string.format("%.2f/%.2f/%.2f/%.2f", C.R, C.G, C.B, C.A)
+    end
+    for _, Field in ipairs({ "DisableEmptyColor", "DisableInaccessibleColor" }) do
+        pcall(function() Looks[#Looks + 1] = Field .. " " .. ColorText(Tile[Field]) end)
+    end
+    pcall(function() Looks[#Looks + 1] = "button bg " .. ColorText(Tile.ProfileButton.BackgroundColor) end)
+    pcall(function() Looks[#Looks + 1] = "image tint " .. ColorText(Tile.ProfileImage.ColorAndOpacity) end)
+    pcall(function() Looks[#Looks + 1] = "tile tint " .. ColorText(Tile.ColorAndOpacity) end)
+    pcall(function() Looks[#Looks + 1] = "bounty icon vis " .. Tile.BountyEligibleIcon:GetVisibility() end)
+    Log("    %s", table.concat(Looks, ", "))
     local Tooltip = Tile.AvatarTooltipWidget
     if not Tooltip or not Tooltip:IsValid() then
         Log("    no tooltip widget yet")
@@ -688,6 +937,15 @@ local function ProbeTile(Tile, Slot)
         Parts[#Parts + 1] = string.format("%s=%s", Skill.Short, TextOf(Details[Skill.Text]))
     end
     Log("    tooltip name '%s', skills %s", TextOf(Details.NameText), table.concat(Parts, " "))
+    local Bars = {}
+    for _, Name in ipairs({ "HealthBar", "StaminaBar" }) do
+        local Ok, Text = pcall(function()
+            local Bar = Details.VitalityStatus[Name]
+            return string.format("%s main %.3f limit %.3f", Name, Bar.MainBar.Percent, Bar.LimitBar.Percent)
+        end)
+        Bars[#Bars + 1] = Ok and Text or (Name .. " unreadable")
+    end
+    Log("    %s, rested %s", table.concat(Bars, ", "), tostring(ReadRested(Tile)))
 end
 
 RegisterKeyBind(Key.F8, { ModifierKey.CONTROL }, function()

@@ -15,7 +15,7 @@
 local UEHelpers = require("UEHelpers")
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.1.0"
+local Version = "0.1.1"
 
 local function Log(Format, ...)
     print("[ModManager] " .. string.format(Format, ...) .. "\n")
@@ -195,8 +195,13 @@ local function IsLiveWidget(Widget)
 end
 
 local function FindMenu()
+    -- In game an old opening screen stays in memory with its buttons gone:
+    -- leave it alone, touching a widget being torn down is not safe.
     for _, Screen in ipairs(FindAllOf("OpeningScreen") or {}) do
-        if Screen:IsValid() and IsLiveWidget(Screen) then return Screen end
+        if Screen:IsValid() and IsLiveWidget(Screen) and Screen.OptionsButton:IsValid()
+            and Screen.ExitButton:IsValid() and Screen:IsVisible() then
+            return Screen
+        end
     end
     return nil
 end
@@ -271,6 +276,8 @@ local function AddModsButton(Menu)
     if HasButton(Menu) then return end
     local Model = Menu.OptionsButton
     local Before = Menu.ExitButton
+    -- In game the opening screen can outlive its buttons.
+    if not Model:IsValid() or not Before:IsValid() then return end
     local Box = Model:GetParent()
     if not Box:IsValid() then return end
 
