@@ -15,7 +15,7 @@
 local UEHelpers = require("UEHelpers")
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.1.1"
+local Version = "0.1.2"
 
 local function Log(Format, ...)
     print("[ModManager] " .. string.format(Format, ...) .. "\n")
@@ -194,16 +194,85 @@ local function IsLiveWidget(Widget)
     return Path ~= nil and string.sub(Path, 1, 17) == "/Engine/Transient"
 end
 
+-- Opening screens UE4SS told us about, instead of searching every object
+-- twice a second: in game an old opening screen stays in memory with its
+-- buttons gone, and touching a widget being torn down may have crashed the
+-- game (crashes of 2026-11-03 and 2026-11-04, both with ModManager on).
+-- No object of the game is kept from one tick to the next: the screens,
+-- their buttons and the mod's own buttons are found again among the live
+-- objects each time, and an identity (address and unique name) tells the
+-- same object apart without touching an old one.
+-- Screens[i] = { Id, Ready (its buttons were seen), Since }
+local Screens = {}
+local ScreenWaitSeconds = 30
+
+local function Identity(Object)
+    return string.format("%X|%s", Object:GetAddress(), Object:GetFName():ToString())
+end
+
+-- Screens dropped for good (their buttons went): never watched again.
+local Forgotten = {}
+
+local function WatchScreen(Screen)
+    local Id = Identity(Screen)
+    if Forgotten[Id] then return end
+    for _, Entry in ipairs(Screens) do
+        if Entry.Id == Id then return end
+    end
+    Screens[#Screens + 1] = { Id = Id, Ready = false, Since = os.time() }
+end
+
+local function MenuReady(Screen)
+    return Screen.OptionsButton:IsValid() and Screen.ExitButton:IsValid()
+end
+
 local function FindMenu()
-    -- In game an old opening screen stays in memory with its buttons gone:
-    -- leave it alone, touching a widget being torn down is not safe.
+    if #Screens == 0 then return nil end
+    local Live = {}
     for _, Screen in ipairs(FindAllOf("OpeningScreen") or {}) do
-        if Screen:IsValid() and IsLiveWidget(Screen) and Screen.OptionsButton:IsValid()
-            and Screen.ExitButton:IsValid() and Screen:IsVisible() then
-            return Screen
+        if Screen:IsValid() then Live[Identity(Screen)] = Screen end
+    end
+    for Index = #Screens, 1, -1 do
+        local Entry = Screens[Index]
+        local Screen = Live[Entry.Id]
+        if not Screen then
+            table.remove(Screens, Index)
+            Forgotten[Entry.Id] = true
+        elseif MenuReady(Screen) then
+            Entry.Ready = true
+            -- Hidden while the options or credits are open: still the menu.
+            return Screen, Screen:IsVisible()
+        elseif Entry.Ready or os.time() - Entry.Since > ScreenWaitSeconds then
+            -- Its buttons are gone (left for the game) or never came:
+            -- never touch it again.
+            table.remove(Screens, Index)
+            Forgotten[Entry.Id] = true
         end
     end
     return nil
+end
+
+local function StartWatchingScreens()
+    local Ok, Error = pcall(function()
+        NotifyOnNewObject("/Script/Anvil.OpeningScreen", function()
+            -- The new screen is found again once built, among the live
+            -- objects; templates are created too: only runtime widgets.
+            ExecuteWithDelay(500, function()
+                ExecuteInGameThread(function()
+                    pcall(function()
+                        for _, Screen in ipairs(FindAllOf("OpeningScreen") or {}) do
+                            if Screen:IsValid() and IsLiveWidget(Screen) then WatchScreen(Screen) end
+                        end
+                    end)
+                end)
+            end)
+        end)
+    end)
+    if not Ok then Log("cannot watch for the main menu: %s", tostring(Error)) end
+    -- A menu already there when the mod loads.
+    for _, Screen in ipairs(FindAllOf("OpeningScreen") or {}) do
+        if Screen:IsValid() and IsLiveWidget(Screen) then WatchScreen(Screen) end
+    end
 end
 
 local function ClassName(Object)
@@ -263,12 +332,13 @@ local function NewMenuButton(Model, Label, Height)
     return Widget
 end
 
--- ModsButton = { Menu, Widget }
+-- ModsButton = { MenuId, Address }: the button is only touched through
+-- Clickables while its menu is alive.
 local ModsButton = nil
 local OpenPanel
 
 local function HasButton(Menu)
-    return ModsButton ~= nil and ModsButton.Widget:IsValid() and SamePanel(ModsButton.Menu, Menu)
+    return ModsButton ~= nil and ModsButton.MenuId == Identity(Menu)
 end
 
 -- Adds a "Mods" button just before Exit, built like the menu's own buttons.
@@ -327,7 +397,7 @@ local function AddModsButton(Menu)
     end)
     if not Ok then Log("could not move the menu buttons: %s", tostring(Error)) end
 
-    ModsButton = { Menu = Menu, Widget = Widget }
+    ModsButton = { MenuId = Identity(Menu), Address = Widget:GetAddress() }
     OnClick(Widget, function() OpenPanel(Menu) end)
     Log("Mods button added to the main menu")
 end
@@ -351,7 +421,8 @@ local PendingColor = { R = 1.0, G = 0.8, B = 0.45, A = 1.0 }
 -- Where players compare their versions with the latest ones.
 local ReleasesUrl = "https://github.com/HarvFeyn/anvil-mods/releases"
 
--- Panel = { Menu, Root, List, Hidden = { { Widget, Visibility } } }
+-- Panel = { MenuId, Root, List, Hidden = { { Widget, Visibility } } }: only
+-- used while its menu is alive.
 local Panel = nil
 
 -- The menu buttons' font, copied once. Reading Model.ButtonText.Font gives
@@ -472,8 +543,9 @@ local function ClosePanel()
         if Item.Widget:IsValid() then Item.Widget:SetVisibility(Item.Visibility) end
     end
     Panel = nil
-    for Address, Item in pairs(Clickables) do
-        if not Item.Widget:IsValid() then Clickables[Address] = nil end
+    -- The panel's buttons are gone with it: forget them, keep the Mods button.
+    for Address in pairs(Clickables) do
+        if not (ModsButton and Address == ModsButton.Address) then Clickables[Address] = nil end
     end
 end
 
@@ -544,7 +616,7 @@ OpenPanel = function(Menu)
         end
     end
 
-    Panel = { Menu = Menu, Root = Root, List = List, Hidden = Hidden }
+    Panel = { MenuId = Identity(Menu), Root = Root, List = List, Hidden = Hidden }
     for _, Mod in ipairs(ListMods() or {}) do
         local Ok, Error = pcall(AddRow, Tree, Model, Mod)
         if not Ok then Log("row for %s failed: %s", Mod.Name, tostring(Error)) end
@@ -562,24 +634,32 @@ end
 local Ticks = 0
 local function PollUi()
     Ticks = Ticks + 1
-    if Ticks % 10 == 0 or not ModsButton then
-        local Menu = FindMenu()
-        if Menu then AddModsButton(Menu) end
+    local Menu, Visible = FindMenu()
+    if not Menu then
+        -- In game: forget every widget of the old menu without touching it.
+        Clickables = {}
+        ModsButton = nil
+        Panel = nil
+        return
     end
-    if Panel and not (Panel.Root:IsValid() and Panel.Menu:IsValid()) then Panel = nil end
-    for Address, Item in pairs(Clickables) do
-        if not Item.Widget:IsValid() then
-            Clickables[Address] = nil
-        else
-            local Button = Item.Widget.Button
-            local Pressed = Button:IsPressed()
-            if Item.WasPressed and not Pressed and Button:IsHovered() then
-                Item.WasPressed = false
-                Item.OnClick()
-                return
-            end
-            Item.WasPressed = Pressed
+    local MenuId = Identity(Menu)
+    if ModsButton and ModsButton.MenuId ~= MenuId then
+        Clickables = {}
+        ModsButton = nil
+        Panel = nil
+    end
+    if not Visible then return end
+    AddModsButton(Menu)
+    if Panel and Panel.MenuId ~= MenuId then Panel = nil end
+    for _, Item in pairs(Clickables) do
+        local Button = Item.Widget.Button
+        local Pressed = Button:IsPressed()
+        if Item.WasPressed and not Pressed and Button:IsHovered() then
+            Item.WasPressed = false
+            Item.OnClick()
+            return
         end
+        Item.WasPressed = Pressed
     end
 end
 
@@ -631,4 +711,5 @@ RegisterKeyBind(Key.F9, { ModifierKey.CONTROL }, function()
     end)
 end)
 
+StartWatchingScreens()
 Log("v%s loaded (Ctrl+F9 probe)", Version)

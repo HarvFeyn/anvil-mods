@@ -18,10 +18,27 @@
 local UEHelpers = require("UEHelpers")
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.2.0"
+local Version = "0.2.1"
 
 local function Log(Format, ...)
     print("[AvatarSort] " .. string.format(Format, ...) .. "\n")
+end
+
+-- No object of the game is kept from one poll to the next: the game
+-- destroys windows and tiles when it changes area (entering a cave), and
+-- touching a destroyed object can crash it (crashes of 2026-11-03 and
+-- 2026-11-04, in UE4SS's Lua code). The mod keeps identities (address and
+-- unique name) and finds the objects again among the live ones each time.
+local function Identity(Object)
+    return string.format("%X|%s", Object:GetAddress(), Object:GetFName():ToString())
+end
+
+-- Only widgets built at runtime live under /Engine/Transient. The others are
+-- templates inside window classes (BPTownCenterWindow_C:WidgetTree...) and
+-- must not be touched.
+local function IsLiveWidget(Widget)
+    local Path = string.match(Widget:GetFullName(), "^%S+%s+(%S+)")
+    return Path ~= nil and string.sub(Path, 1, 17) == "/Engine/Transient"
 end
 
 -- Skills the game uses, as indices of FAvatarProfile.Attributes
@@ -72,14 +89,29 @@ local ProfileWidgetClass = "/Script/Anvil.AvatarProfileWidget"
 local StorageWidgetAsset = "/Game/UI/Gameplay/StructureWindows/Avatars/BPAvatarStorageWidget"
 local StorageWidgetBPClass = StorageWidgetAsset .. ".BPAvatarStorageWidget_C"
 
--- Fake skills for the test bench, keyed by tile address.
+-- Fake skills for the test bench, keyed by tile identity.
 local FakeSkills = {}
--- Fake rested state for the test bench, keyed by tile address.
+-- Fake rested state for the test bench, keyed by tile identity.
 local FakeRested = {}
 -- Game order of each tile (row * 1000 + column) the first time we saw it,
--- keyed by tile address. Breaks ties so equal tiles keep the game's order.
+-- keyed by tile identity. Breaks ties so equal tiles keep the game's order.
 local GameOrder = {}
-local TestBench = nil
+-- The test bench's storage widget, by identity (it is not under
+-- /Engine/Transient like the game's windows).
+local TestBenchId = nil
+
+-- The storage widgets alive right now, by identity: the game's windows
+-- and the test bench.
+local function LiveStorages()
+    local Live = {}
+    for _, Storage in ipairs(FindAllOf("AvatarStorageWidget") or {}) do
+        if Storage:IsValid() then
+            local Id = Identity(Storage)
+            if Id == TestBenchId or IsLiveWidget(Storage) then Live[Id] = Storage end
+        end
+    end
+    return Live
+end
 local TestBenchColumns = nil
 
 ------------------------------------------------------------------------
@@ -135,7 +167,7 @@ end
 -- Returns { Current = { Fitness = n, ... }, Max = { Fitness = n or nil, ... } }
 -- or nil when unknown.
 local function ReadSkills(Tile)
-    return FakeSkills[Tile:GetAddress()] or ReadSkillsFromTooltip(Tile)
+    return FakeSkills[Identity(Tile)] or ReadSkillsFromTooltip(Tile)
 end
 
 -- Full health and full stamina, read from the tooltip's vitality bars
@@ -148,7 +180,7 @@ local function ReadBarPercent(Bar)
 end
 
 local function ReadRested(Tile)
-    local Fake = FakeRested[Tile:GetAddress()]
+    local Fake = FakeRested[Identity(Tile)]
     if Fake ~= nil then return Fake end
     local Ok, Vitality = pcall(function()
         return Tile.AvatarTooltipWidget.AvatarProfileDetailsWidget.VitalityStatus
@@ -236,8 +268,10 @@ local CheckBoxTextures = { Unchecked = "CheckboxEmpty", Checked = "CheckboxCheck
 local CheckBoxSize = 14
 local CheckBoxLabelColor = { R = 0.8, G = 0.8, B = 0.8, A = 1.0 }
 
--- Bars[storage address] = { Bar = WrapBox, Buttons = { { Button, Mode, WasPressed } },
---   Check = CheckBox, CheckLabel = TextBlock }
+-- Bars[storage identity] = { BarAddress, Bar = WrapBox, Buttons = { { Button,
+--   Mode, WasPressed } }, Check = CheckBox, CheckLabel = TextBlock }. Its
+-- widgets live in the storage's tree: only used after finding that very
+-- storage among the live ones, with the bar still in its scroll box.
 local Bars = {}
 
 local function NewWidget(ClassName, Outer)
@@ -256,20 +290,42 @@ local function LoadObject(Folder, Name)
     return nil
 end
 
-local function RefreshButtonColors()
-    for Address, Entry in pairs(Bars) do
-        if Entry.Bar:IsValid() then
-            for _, Item in ipairs(Entry.Buttons) do
-                local Active = Item.Mode == CurrentMode
-                Item.Button:SetBackgroundColor(Active and ActiveColor or InactiveColor)
-            end
-            if Entry.Check:IsChecked() ~= RestedOnly then Entry.Check:SetIsChecked(RestedOnly) end
-            Entry.CheckLabel:SetColorAndOpacity({
-                SpecifiedColor = RestedOnly and ActiveColor or CheckBoxLabelColor, ColorUseRule = 0,
-            })
-        else
-            Bars[Address] = nil
+-- The bars whose storage is alive with the bar still first in its scroll
+-- box (compared by address, without touching the bar). Bars of storages
+-- gone, or whose bar the game removed, are forgotten untouched.
+-- Returns { { Storage, Entry } }.
+local function LiveBars()
+    local Live = LiveStorages()
+    local Found = {}
+    for Id, Entry in pairs(Bars) do
+        local Storage = Live[Id]
+        local InPlace = false
+        if Storage then
+            pcall(function()
+                local First = Storage.AvatarProfileGridPanel:GetParent():GetChildAt(0)
+                InPlace = First:IsValid() and First:GetAddress() == Entry.BarAddress
+            end)
         end
+        if InPlace then
+            Found[#Found + 1] = { Storage = Storage, Entry = Entry }
+        else
+            Bars[Id] = nil
+        end
+    end
+    return Found
+end
+
+local function RefreshButtonColors()
+    for _, Live in ipairs(LiveBars()) do
+        local Entry = Live.Entry
+        for _, Item in ipairs(Entry.Buttons) do
+            local Active = Item.Mode == CurrentMode
+            Item.Button:SetBackgroundColor(Active and ActiveColor or InactiveColor)
+        end
+        if Entry.Check:IsChecked() ~= RestedOnly then Entry.Check:SetIsChecked(RestedOnly) end
+        Entry.CheckLabel:SetColorAndOpacity({
+            SpecifiedColor = RestedOnly and ActiveColor or CheckBoxLabelColor, ColorUseRule = 0,
+        })
     end
 end
 
@@ -302,11 +358,13 @@ local function SetTooltip(Button, Help)
     end
 end
 
+-- The bar is the first child of the live storage's scroll box: compared by
+-- address, without touching the bar.
 local function HasBar(Storage, ScrollBox)
-    local Entry = Bars[Storage:GetAddress()]
-    if not Entry or not Entry.Bar:IsValid() then return false end
+    local Entry = Bars[Identity(Storage)]
+    if not Entry then return false end
     local First = ScrollBox:GetChildAt(0)
-    return First:IsValid() and First:GetAddress() == Entry.Bar:GetAddress()
+    return First:IsValid() and First:GetAddress() == Entry.BarAddress
 end
 
 -- Adds the button row to a storage widget. StyleTile is one of its tiles,
@@ -422,7 +480,9 @@ local function AddSortBar(Storage, StyleTile)
     GridSlot:SetHorizontalAlignment(HAlignLeft)
     GridSlot:SetVerticalAlignment(VAlignTop)
 
-    Bars[Storage:GetAddress()] = { Bar = Bar, Buttons = Buttons, Check = Check, CheckLabel = CheckLabel }
+    Bars[Identity(Storage)] = {
+        BarAddress = Bar:GetAddress(), Bar = Bar, Buttons = Buttons, Check = Check, CheckLabel = CheckLabel,
+    }
     RefreshButtonColors()
 end
 
@@ -431,57 +491,65 @@ end
 -- tile's main overlay (the one holding the owner icon), centred on the icon.
 ------------------------------------------------------------------------
 
--- TileLabels[tile address] = TextBlock; LabelTexts[label address] = shown text
-local TileLabels = {}
+-- LabelAddress[tile identity] = address of its label; LabelTexts[tile
+-- identity] = shown text. The label is found again among the live tile's
+-- overlay children by address, never kept.
+local LabelAddress = {}
 local LabelTexts = {}
+
+local function FindChildAt(Panel, Address)
+    for Index = 0, Panel:GetChildrenCount() - 1 do
+        local Child = Panel:GetChildAt(Index)
+        if Child:IsValid() and Child:GetAddress() == Address then return Child end
+    end
+    return nil
+end
 
 local function UpdateTileLabel(Tile, Values)
     local Overlay = Tile.OwnerTypeIcon:GetParent()
     if not Overlay:IsValid() then return end
 
-    local Label = TileLabels[Tile:GetAddress()]
-    local Parent = Label and Label:IsValid() and Label:GetParent()
-    if not Parent or not Parent:IsValid() or Parent:GetAddress() ~= Overlay:GetAddress() then
+    local TileId = Identity(Tile)
+    local Label = LabelAddress[TileId] and FindChildAt(Overlay, LabelAddress[TileId])
+    if not Label then
         Label = NewWidget("TextBlock", Tile.WidgetTree)
         pcall(function() Label:SetFont(Tile.StackSizeText.Font) end)
         local LabelSlot = Overlay:AddChildToOverlay(Label)
         LabelSlot:SetHorizontalAlignment(HAlignCenter)
         LabelSlot:SetVerticalAlignment(VAlignCenter)
         LabelSlot:SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = 0 })
-        TileLabels[Tile:GetAddress()] = Label
-        -- A freed label's address can come back: forget what it showed.
-        LabelTexts[Label:GetAddress()] = nil
+        LabelAddress[TileId] = Label:GetAddress()
+        LabelTexts[TileId] = nil
     end
     -- No label on auxiliaries: always 1/1, and the stack count is enough.
     local Shown = Values and not IsAuxiliary(Values)
     local Text = Shown and ModeText(Values) or ""
-    if LabelTexts[Label:GetAddress()] ~= Text then
+    if LabelTexts[TileId] ~= Text then
         Label:SetText(FText(Text))
-        LabelTexts[Label:GetAddress()] = Text
+        LabelTexts[TileId] = Text
     end
 end
 
--- Tiles the Rested filter collapsed: HiddenTiles[tile address] = { Tile,
--- Visibility } with the visibility to give back.
+-- Tiles the Rested filter collapsed: HiddenTiles[tile identity] = the
+-- visibility to give back. Always called with a live tile.
 local HiddenTiles = {}
 
 local function SetTileHidden(Tile, Hidden)
-    local Address = Tile:GetAddress()
-    local Entry = HiddenTiles[Address]
+    local TileId = Identity(Tile)
+    local Before = HiddenTiles[TileId]
     if Hidden then
-        if not (Entry and Entry.Tile:IsValid()) then
-            HiddenTiles[Address] = { Tile = Tile, Visibility = Tile:GetVisibility() }
-        end
+        if Before == nil then HiddenTiles[TileId] = Tile:GetVisibility() end
         -- Checked on every sort: the game may show the tile again.
         if Tile:GetVisibility() ~= SlateCollapsed then Tile:SetVisibility(SlateCollapsed) end
-    elseif not Hidden and Entry then
-        if Entry.Tile:IsValid() then Tile:SetVisibility(Entry.Visibility) end
-        HiddenTiles[Address] = nil
+    elseif Before ~= nil then
+        Tile:SetVisibility(Before)
+        HiddenTiles[TileId] = nil
     end
 end
 
--- Layouts[storage address] = { Storage, Count, Items = { { Slot, Row, Column } } }:
--- where the mod last put each tile, to notice when the game moves them back.
+-- Layouts[storage identity] = { Count, Items = { [tile identity] = { Row,
+-- Column } } }: where the mod last put each tile, to notice when the game
+-- moves them back.
 local Layouts = {}
 
 local function SortStorage(Storage)
@@ -490,9 +558,9 @@ local function SortStorage(Storage)
     local NumColumns = 0
 
     ForEachTile(Storage, function(Tile, Slot)
-        local Address = Tile:GetAddress()
-        if GameOrder[Address] == nil then
-            GameOrder[Address] = Slot.Row * 1000 + Slot.Column
+        local TileId = Identity(Tile)
+        if GameOrder[TileId] == nil then
+            GameOrder[TileId] = Slot.Row * 1000 + Slot.Column
         end
         NumColumns = math.max(NumColumns, Slot.Column + 1)
         StyleTile = StyleTile or Tile
@@ -505,8 +573,9 @@ local function SortStorage(Storage)
         local Hidden = RestedOnly and Values ~= nil and not Auxiliary and ReadRested(Tile) == false
         SetTileHidden(Tile, Hidden)
         Entries[#Entries + 1] = {
+            TileId = TileId,
             Slot = Slot,
-            Order = GameOrder[Address],
+            Order = GameOrder[TileId],
             Auxiliary = Auxiliary,
             Hidden = Hidden,
             Key = SortKey(Values),
@@ -538,25 +607,13 @@ local function SortStorage(Storage)
         local Column = (Position - 1) % NumColumns
         if Entry.Slot.Row ~= Row then Entry.Slot:SetRow(Row) end
         if Entry.Slot.Column ~= Column then Entry.Slot:SetColumn(Column) end
-        Items[#Items + 1] = { Slot = Entry.Slot, Row = Row, Column = Column }
+        Items[Entry.TileId] = { Row = Row, Column = Column }
     end
-    Layouts[Storage:GetAddress()] = { Storage = Storage, Count = #Entries, Items = Items }
-end
-
--- Only widgets built at runtime live under /Engine/Transient. The others are
--- templates inside window classes (BPTownCenterWindow_C:WidgetTree...) and
--- must not be touched.
-local function IsLiveWidget(Widget)
-    local Path = string.match(Widget:GetFullName(), "^%S+%s+(%S+)")
-    return Path ~= nil and string.sub(Path, 1, 17) == "/Engine/Transient"
+    Layouts[Identity(Storage)] = { Count = #Entries, Items = Items }
 end
 
 local function ForEachStorage(Callback)
-    for _, Storage in ipairs(FindAllOf("AvatarStorageWidget") or {}) do
-        if Storage:IsValid() and IsLiveWidget(Storage) then
-            Callback(Storage)
-        end
-    end
+    for _, Storage in pairs(LiveStorages()) do Callback(Storage) end
 end
 
 -- Defined with the poll loop below; keeps that loop alive.
@@ -675,7 +732,7 @@ local function OpenTestBench(Columns)
     -- Same column count as the window it stands for.
     pcall(function() Widget.PreferredNumColumns = Columns end)
     Widget:AddToViewport(100)
-    TestBench = Widget
+    TestBenchId = Identity(Widget)
     TestBenchColumns = Columns
 
     -- Distinct names make it easy to follow each tile when it moves.
@@ -709,8 +766,8 @@ local function OpenTestBench(Columns)
             local Set = math.random(2) == 1 and Icons.Male or Icons.Female
             Name, Texture = Names[(Count - 1) % #Names + 1], Set[DominantSkill(Values)]
         end
-        FakeSkills[Tile:GetAddress()] = Values
-        if Count ~= AuxiliaryTile then FakeRested[Tile:GetAddress()] = math.random(2) == 1 end
+        FakeSkills[Identity(Tile)] = Values
+        if Count ~= AuxiliaryTile then FakeRested[Identity(Tile)] = math.random(2) == 1 end
 
         if Tile.NameText:IsValid() then Tile.NameText:SetText(FText(Name)) end
         if Texture and Tile.ProfileImage:IsValid() then
@@ -728,8 +785,9 @@ local function OpenTestBench(Columns)
 end
 
 local function CloseTestBench()
-    if TestBench and TestBench:IsValid() then TestBench:RemoveFromParent() end
-    TestBench = nil
+    local Bench = TestBenchId and LiveStorages()[TestBenchId]
+    if Bench then Bench:RemoveFromParent() end
+    TestBenchId = nil
     FakeSkills = {}
     FakeRested = {}
     Log("test bench closed")
@@ -739,7 +797,7 @@ RegisterKeyBind(Key.F7, { ModifierKey.CONTROL }, function()
     ExecuteInGameThread(function()
         local Ok, Error = pcall(function()
             -- Closed, then 6 columns (deployment), 4 columns (caravan), closed.
-            local Open = TestBench and TestBench:IsValid()
+            local Open = TestBenchId ~= nil and LiveStorages()[TestBenchId] ~= nil
             local Columns = Open and TestBenchColumns
             if Open then CloseTestBench() end
             if not Open then
@@ -781,24 +839,21 @@ end)
 -- button. Polled every 30 ms, only while at least one bar exists.
 local PollQueuedAt = nil
 local function PollButtons()
-    for Address, Entry in pairs(Bars) do
-        if not Entry.Bar:IsValid() then
-            Bars[Address] = nil
-        else
-            for _, Item in ipairs(Entry.Buttons) do
-                local Pressed = Item.Button:IsPressed()
-                if Item.WasPressed and not Pressed and Item.Button:IsHovered() then
-                    Item.WasPressed = false
-                    SetMode(Item.Mode)
-                    return
-                end
-                Item.WasPressed = Pressed
-            end
-            local Checked = Entry.Check:IsChecked()
-            if Checked ~= RestedOnly then
-                SetRestedOnly(Checked)
+    for _, Live in ipairs(LiveBars()) do
+        local Entry = Live.Entry
+        for _, Item in ipairs(Entry.Buttons) do
+            local Pressed = Item.Button:IsPressed()
+            if Item.WasPressed and not Pressed and Item.Button:IsHovered() then
+                Item.WasPressed = false
+                SetMode(Item.Mode)
                 return
             end
+            Item.WasPressed = Pressed
+        end
+        local Checked = Entry.Check:IsChecked()
+        if Checked ~= RestedOnly then
+            SetRestedOnly(Checked)
+            return
         end
     end
 end
@@ -807,15 +862,15 @@ end
 -- deployment pop-up about half a second after a sort) without creating new
 -- tiles. Notice it at the next poll and sort again. Once a second, sort
 -- anyway, in case the game changed a tile's avatar without moving it.
-local function GameMovedTiles(Layout)
-    local Grid = Layout.Storage.AvatarProfileGridPanel
+local function GameMovedTiles(Storage, Layout)
+    local Grid = Storage.AvatarProfileGridPanel
     if Grid:GetChildrenCount() ~= Layout.Count then return true end
-    for _, Item in ipairs(Layout.Items) do
-        if Item.Slot:IsValid() and (Item.Slot.Row ~= Item.Row or Item.Slot.Column ~= Item.Column) then
-            return true
-        end
-    end
-    return false
+    local Moved = false
+    ForEachTile(Storage, function(Tile, Slot)
+        local Item = Layout.Items[Identity(Tile)]
+        if not Item or Slot.Row ~= Item.Row or Slot.Column ~= Item.Column then Moved = true end
+    end)
+    return Moved
 end
 
 local WatchTicks = 0
@@ -823,17 +878,19 @@ local ResortLogged = 0
 local function WatchLayouts()
     WatchTicks = WatchTicks + 1
     local Periodic = WatchTicks % 33 == 0
-    for Address, Layout in pairs(Layouts) do
-        if not Layout.Storage:IsValid() then
-            Layouts[Address] = nil
-        elseif Periodic or GameMovedTiles(Layout) then
+    local Live = LiveStorages()
+    for Id, Layout in pairs(Layouts) do
+        local Storage = Live[Id]
+        if not Storage then
+            Layouts[Id] = nil
+        elseif Periodic or GameMovedTiles(Storage, Layout) then
             if not Periodic and ResortLogged < 5 then
                 ResortLogged = ResortLogged + 1
                 Log("game moved the tiles back, sorting again")
             end
-            local Ok, Error = pcall(SortStorage, Layout.Storage)
+            local Ok, Error = pcall(SortStorage, Storage)
             if not Ok then
-                Layouts[Address] = nil
+                Layouts[Id] = nil
                 Log("re-sort failed: %s", tostring(Error))
             end
         end

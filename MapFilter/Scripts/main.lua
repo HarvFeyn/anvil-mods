@@ -239,8 +239,19 @@ end
 local Seen = {}
 -- Compass images are matched to a kind by their texture.
 local KindByTexture = {}
--- Widgets this mod made transparent: Faded[address] = { Widget, Color before }
+-- Widgets this mod made transparent: Faded[identity] = { Color, Visibility
+-- before }. No widget is kept: they are only touched when found again
+-- among the live objects.
 local Faded = {}
+
+-- Objects of the game are never kept from one tick to the next: the game
+-- destroys widgets when it changes area (entering a cave), and touching a
+-- destroyed object can crash it. Each scan finds them again among the live
+-- objects; an identity (address and unique name) tells the same object
+-- apart without touching an old one.
+local function Identity(Object)
+    return string.format("%X|%s", Object:GetAddress(), Object:GetFName():ToString())
+end
 
 local function TintOf(Widget)
     local Ok, Color = pcall(function()
@@ -254,14 +265,14 @@ end
 -- Collapse: also collapse the widget, so a hidden map post cannot be
 -- clicked. Not for icons: the game shows some of them again at once.
 local function SetFaded(Widget, Hide, Collapse)
-    local Address = Widget:GetAddress()
-    local Entry = Faded[Address]
+    local Key = Identity(Widget)
+    local Entry = Faded[Key]
     if Hide then
         local Color = TintOf(Widget)
         if Color and Color.A ~= 0 then
             if not Entry then
-                Entry = { Widget = Widget, Color = Color, Visibility = Widget:GetVisibility() }
-                Faded[Address] = Entry
+                Entry = { Color = Color, Visibility = Widget:GetVisibility() }
+                Faded[Key] = Entry
             end
             Widget:SetColorAndOpacity({ R = Color.R, G = Color.G, B = Color.B, A = 0 })
         end
@@ -269,7 +280,7 @@ local function SetFaded(Widget, Hide, Collapse)
     elseif Entry then
         Widget:SetColorAndOpacity(Entry.Color)
         if Collapse then Widget:SetVisibility(Entry.Visibility) end
-        Faded[Address] = nil
+        Faded[Key] = nil
     end
 end
 
@@ -334,7 +345,10 @@ end
 -- Legend panel on the map
 ------------------------------------------------------------------------
 
--- UI = { Map, Button, Panel, List, Rows = { { Check, Kind } }, ButtonWasPressed }
+-- UI = { MapIdentity, Map, Button, Panel, List, Rows = { { Check, Kind } },
+-- ButtonWasPressed }. Its widgets live in the map's tree: they are only
+-- used after checking that this very map is still alive.
+
 local UI = nil
 
 -- A font for our texts: the map's place names (copied, it is a live struct).
@@ -532,17 +546,23 @@ local function AddLegend(Map)
         PanelSlot:SetZOrder(100)
     end)
 
-    UI = { Map = Map, Button = Button, Panel = Panel, List = List, Rows = {}, ButtonWasPressed = false }
+    UI = { MapIdentity = Identity(Map), Map = Map, Button = Button, Panel = Panel, List = List, Rows = {}, ButtonWasPressed = false }
     SetPanelOpen(false)
     Log("Icons button added to the map")
     return true
 end
 
 local function PollLegend()
-    if not UI or not UI.Map:IsValid() or not UI.Button:IsValid() then
+    local Map = FindMap()
+    if not Map then
         UI = nil
-        local Map = FindMap()
-        if not Map or not AddLegend(Map) then return end
+        return
+    end
+    if UI and UI.MapIdentity ~= Identity(Map) then UI = nil end
+    if UI then
+        UI.Map = Map
+    elseif not AddLegend(Map) then
+        return
     end
     -- The button: a press then a release with the mouse still over it.
     local Pressed = UI.Button:IsPressed()
