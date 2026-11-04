@@ -23,9 +23,14 @@ $Mods = Get-ChildItem -Directory $PSScriptRoot | Where-Object { Test-Path (Join-
 
 foreach ($Mod in $Mods) {
     $Target = Join-Path $ModsDir $Mod.Name
+    # The player's choices (NameColors, for example) live in the installed
+    # folder only: keep them across installs.
+    $SettingsPath = Join-Path $Target 'settings.txt'
+    $Settings = if (Test-Path $SettingsPath) { [System.IO.File]::ReadAllBytes($SettingsPath) } else { $null }
     if (Test-Path $Target) { Remove-Item -Recurse -Force $Target }
     Copy-Item -Recurse $Mod.FullName $Target
-    Write-Output "Installed $($Mod.Name)"
+    if ($Settings) { [System.IO.File]::WriteAllBytes($SettingsPath, $Settings) }
+    Write-Output "Installed $($Mod.Name)$(if ($Settings) { ' (settings kept)' })"
 
     $ModsTxt = Join-Path $ModsDir 'mods.txt'
     $Lines = Get-Content $ModsTxt

@@ -6,7 +6,7 @@ main menu.
 **[Download ModManager.zip](../../../releases/latest/download/ModManager.zip)**
 · [How to install](../README.md#installation)
 
-Version 0.1.2, tested with the Anvil Empires playtest of November 2026 and
+Version 0.2.0, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
 ## What it does
@@ -18,10 +18,13 @@ a list of the installed mods, with for each one:
 - its name and installed version;
 - its state: **On**, **Off**, or **On after restart** / **Off after
   restart** when you changed it;
-- a short description.
+- a short description;
+- a **Settings** button for mods that have settings (NameColors, for
+  example): pick a colour in a palette, or go back to the default.
 
-Changes apply the next time the game starts: a running mod cannot be
-unloaded. ModManager itself is always on.
+Turning a mod on or off applies the next time the game starts: a running
+mod cannot be unloaded. ModManager itself is always on. Settings apply
+right away.
 
 **Check for updates** opens the [Releases](../../../releases) page, where you
 can compare your versions with the latest ones.

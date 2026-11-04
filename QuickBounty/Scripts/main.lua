@@ -22,7 +22,7 @@
 --]]
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.1.0"
+local Version = "0.1.1"
 
 local function Log(Format, ...)
     print("[QuickBounty] " .. string.format(Format, ...) .. "\n")
@@ -44,6 +44,87 @@ end
 
 local function RegisterDevKey(KeyName, Callback)
     if DevTools then RegisterKeyBind(KeyName, { ModifierKey.CONTROL }, Callback) end
+end
+
+-- IsValid() only says an object is not deleted yet. An object the game has
+-- started to destroy still passes it while its parts are being taken apart,
+-- and reading those parts crashed the game (several crashes inside UE4SS's
+-- Lua code, 2026-11-03 and 04). IsSafe also refuses objects flagged as being
+-- destroyed or unreachable. Every object of the game goes through it before
+-- the mod reads or changes anything on it, sub-objects included.
+local DyingFlags = 0x8000 | 0x10000 -- RF_BeginDestroyed, RF_FinishDestroyed
+local InternalDyingFlags = nil
+pcall(function()
+    DyingFlags = (EObjectFlags.RF_BeginDestroyed or 0x8000) | (EObjectFlags.RF_FinishDestroyed or 0x10000)
+end)
+pcall(function()
+    local Flags = 0
+    for _, Name in ipairs({ "Unreachable", "PendingKill", "Garbage" }) do
+        if EInternalObjectFlags[Name] then Flags = Flags | EInternalObjectFlags[Name] end
+    end
+    if Flags ~= 0 then InternalDyingFlags = Flags end
+end)
+
+local function IsSafe(Object)
+    if not Object then return false end
+    local Ok, Safe = pcall(function()
+        if not Object:IsValid() then return false end
+        if Object:HasAnyFlags(DyingFlags) then return false end
+        if InternalDyingFlags and Object:HasAnyInternalFlags(InternalDyingFlags) then return false end
+        return true
+    end)
+    return Ok and Safe == true
+end
+
+-- When the game changes area, it tears down its HUD and windows and builds
+-- new ones. Every crash of 2026-11-03 and 04 happened around such a change,
+-- while a mod read a widget being built or destroyed. Probe of 2026-11-04:
+-- every change (connecting, entering or leaving a cave, back to the menu)
+-- is a map load, announced by UE4SS's load map hooks: "start", then the old
+-- HUD ends, the new HUD begins, "done" about 0.4 s later. A death and
+-- redeploy is not a change of area. The mod touches nothing from "start"
+-- until ResumeSeconds after "done", while the old objects are cleared and
+-- the new windows finish building.
+local ResumeSeconds = 0.5
+local Loading = false
+local ResumeAt = 0
+
+local HooksOk = pcall(function()
+    RegisterLoadMapPreHook(function()
+        Loading = true
+    end)
+    RegisterLoadMapPostHook(function()
+        Loading = false
+        ResumeAt = os.clock() + ResumeSeconds
+    end)
+end)
+if not HooksOk then Log("load map hooks not available: pausing on HUD changes only") end
+
+-- Backup, in case a change of area ever comes without a map load: the HUD
+-- changing (it is replaced at each change) also gives a pause.
+-- Searching all objects of the game for the HUD has its own risk: twice a
+-- second is enough for a backup.
+local LastHud = nil
+local NextHudCheck = 0
+
+local function WorldIsSettling()
+    if Loading then return true end
+    local Now = os.clock()
+    if Now >= NextHudCheck then
+        NextHudCheck = Now + 0.5
+        local Hud = "none"
+        for _, Actor in ipairs(FindAllOf("AnvilHUD") or {}) do
+            if IsSafe(Actor) and not string.find(Actor:GetFullName(), "Default__", 1, true) then
+                Hud = string.format("%X|%s", Actor:GetAddress(), Actor:GetFName():ToString())
+                break
+            end
+        end
+        if Hud ~= LastHud then
+            if LastHud ~= nil then ResumeAt = math.max(ResumeAt, Now + ResumeSeconds) end
+            LastHud = Hud
+        end
+    end
+    return Now < ResumeAt
 end
 
 local Visibilities = { [0] = "Visible", "Collapsed", "Hidden", "HitTestInvisible", "SelfHitTestInvisible" }
@@ -72,7 +153,7 @@ end
 -- The open bounty board window, or the one with this identity.
 local function FindWindow(WantedIdentity)
     for _, Window in ipairs(FindAllOf("BountyBoardWindow") or {}) do
-        if Window:IsValid() and IsLiveWidget(Window) then
+        if IsSafe(Window) and IsLiveWidget(Window) then
             if WantedIdentity then
                 if Identity(Window) == WantedIdentity then return Window end
             elseif Window:IsVisible() then
@@ -97,7 +178,7 @@ local SilverDataCount = 0
 local function FindSilverData()
     local Found = {}
     for _, Data in ipairs(FindAllOf("PlayerControllerDataComponent") or {}) do
-        if Data:IsValid() and not string.find(Data:GetFullName(), "Default__", 1, true) then
+        if IsSafe(Data) and not string.find(Data:GetFullName(), "Default__", 1, true) then
             Found[#Found + 1] = Data
         end
     end
@@ -116,7 +197,7 @@ end
 -- "Visible, enabled, opacity 1.00" for one widget, or "missing".
 local function Looks(Widget)
     local Ok, Text = pcall(function()
-        if not Widget or not Widget:IsValid() then return "missing" end
+        if not Widget or not IsSafe(Widget) then return "missing" end
         local Visibility = Widget:GetVisibility()
         return string.format("%s%s%s", Visibilities[Visibility] or tostring(Visibility),
             Widget:GetIsEnabled() and "" or " disabled",
@@ -126,7 +207,7 @@ local function Looks(Widget)
 end
 
 local function LogTree(Widget, Depth)
-    if Depth > 7 or not Widget or not Widget:IsValid() then return end
+    if Depth > 7 or not Widget or not IsSafe(Widget) then return end
     Log("%s%s %s: %s", string.rep("  ", Depth), ClassName(Widget), Widget:GetFName():ToString(), Looks(Widget))
     local Ok, Count = pcall(function() return Widget:GetChildrenCount() end)
     if not Ok then return end
@@ -148,7 +229,7 @@ local function State(Window)
     -- The hand-in buttons of the bounties shown.
     local Enabled, Total = 0, 0
     for _, Bounty in ipairs(FindAllOf("BountyWidget") or {}) do
-        if Bounty:IsValid() and IsLiveWidget(Bounty) then
+        if IsSafe(Bounty) and IsLiveWidget(Bounty) then
             local Ok, On = pcall(function() return Bounty.SubmitBountyButton:GetIsEnabled() end)
             Total = Total + 1
             if Ok and On then Enabled = Enabled + 1 end
@@ -280,10 +361,19 @@ local function ManageWithdrawButton(Window, Silver)
     if Button:GetIsEnabled() ~= Enabled then Button:SetIsEnabled(Enabled) end
 end
 
+local WindowOpen = false
+local NextIdleSearch = 0
+
 local function PollWindow()
     Ticks = Ticks + 1
-    -- Found again every tick: see Identity.
+    if WorldIsSettling() then return end
+    -- Found again every tick while open (see Identity). While closed, looked
+    -- for twice a second only: searching has its own risk.
+    local Now = os.clock()
+    if not WindowOpen and Now < NextIdleSearch then return end
+    NextIdleSearch = Now + 0.5
     local Window = FindWindow()
+    WindowOpen = Window ~= nil
     if not Window then
         ErrorShown = nil
         WithdrawWasPressed = false

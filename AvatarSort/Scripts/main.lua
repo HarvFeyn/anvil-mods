@@ -19,7 +19,7 @@
 local UEHelpers = require("UEHelpers")
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.2.1"
+local Version = "0.2.2"
 
 local function Log(Format, ...)
     print("[AvatarSort] " .. string.format(Format, ...) .. "\n")
@@ -41,6 +41,87 @@ end
 
 local function RegisterDevKey(KeyName, Callback)
     if DevTools then RegisterKeyBind(KeyName, { ModifierKey.CONTROL }, Callback) end
+end
+
+-- IsValid() only says an object is not deleted yet. An object the game has
+-- started to destroy still passes it while its parts are being taken apart,
+-- and reading those parts crashed the game (several crashes inside UE4SS's
+-- Lua code, 2026-11-03 and 04). IsSafe also refuses objects flagged as being
+-- destroyed or unreachable. Every object of the game goes through it before
+-- the mod reads or changes anything on it, sub-objects included.
+local DyingFlags = 0x8000 | 0x10000 -- RF_BeginDestroyed, RF_FinishDestroyed
+local InternalDyingFlags = nil
+pcall(function()
+    DyingFlags = (EObjectFlags.RF_BeginDestroyed or 0x8000) | (EObjectFlags.RF_FinishDestroyed or 0x10000)
+end)
+pcall(function()
+    local Flags = 0
+    for _, Name in ipairs({ "Unreachable", "PendingKill", "Garbage" }) do
+        if EInternalObjectFlags[Name] then Flags = Flags | EInternalObjectFlags[Name] end
+    end
+    if Flags ~= 0 then InternalDyingFlags = Flags end
+end)
+
+local function IsSafe(Object)
+    if not Object then return false end
+    local Ok, Safe = pcall(function()
+        if not Object:IsValid() then return false end
+        if Object:HasAnyFlags(DyingFlags) then return false end
+        if InternalDyingFlags and Object:HasAnyInternalFlags(InternalDyingFlags) then return false end
+        return true
+    end)
+    return Ok and Safe == true
+end
+
+-- When the game changes area, it tears down its HUD and windows and builds
+-- new ones. Every crash of 2026-11-03 and 04 happened around such a change,
+-- while a mod read a widget being built or destroyed. Probe of 2026-11-04:
+-- every change (connecting, entering or leaving a cave, back to the menu)
+-- is a map load, announced by UE4SS's load map hooks: "start", then the old
+-- HUD ends, the new HUD begins, "done" about 0.4 s later. A death and
+-- redeploy is not a change of area. The mod touches nothing from "start"
+-- until ResumeSeconds after "done", while the old objects are cleared and
+-- the new windows finish building.
+local ResumeSeconds = 0.5
+local Loading = false
+local ResumeAt = 0
+
+local HooksOk = pcall(function()
+    RegisterLoadMapPreHook(function()
+        Loading = true
+    end)
+    RegisterLoadMapPostHook(function()
+        Loading = false
+        ResumeAt = os.clock() + ResumeSeconds
+    end)
+end)
+if not HooksOk then Log("load map hooks not available: pausing on HUD changes only") end
+
+-- Backup, in case a change of area ever comes without a map load: the HUD
+-- changing (it is replaced at each change) also gives a pause.
+-- Searching all objects of the game for the HUD has its own risk: twice a
+-- second is enough for a backup.
+local LastHud = nil
+local NextHudCheck = 0
+
+local function WorldIsSettling()
+    if Loading then return true end
+    local Now = os.clock()
+    if Now >= NextHudCheck then
+        NextHudCheck = Now + 0.5
+        local Hud = "none"
+        for _, Actor in ipairs(FindAllOf("AnvilHUD") or {}) do
+            if IsSafe(Actor) and not string.find(Actor:GetFullName(), "Default__", 1, true) then
+                Hud = string.format("%X|%s", Actor:GetAddress(), Actor:GetFName():ToString())
+                break
+            end
+        end
+        if Hud ~= LastHud then
+            if LastHud ~= nil then ResumeAt = math.max(ResumeAt, Now + ResumeSeconds) end
+            LastHud = Hud
+        end
+    end
+    return Now < ResumeAt
 end
 
 -- No object of the game is kept from one poll to the next: the game
@@ -121,15 +202,68 @@ local TestBenchId = nil
 
 -- The storage widgets alive right now, by identity: the game's windows
 -- and the test bench.
-local function LiveStorages()
-    local Live = {}
-    for _, Storage in ipairs(FindAllOf("AvatarStorageWidget") or {}) do
-        if Storage:IsValid() then
-            local Id = Identity(Storage)
-            if Id == TestBenchId or IsLiveWidget(Storage) then Live[Id] = Storage end
+-- True when the widget and every widget holding it are visible, up to the
+-- screen: a window the player closed is collapsed somewhere above. The
+-- deployment pop-up lives in the HUD for the whole game, open or not; the
+-- mod leaves alone what is not on screen.
+local UserWidgetClass = nil
+local function IsOnScreen(Widget)
+    UserWidgetClass = UserWidgetClass or StaticFindObject("/Script/UMG.UserWidget")
+    local Current = Widget
+    for _ = 1, 40 do
+        if not IsSafe(Current) then return false end
+        local Visibility = Current:GetVisibility()
+        if Visibility == 1 or Visibility == 2 then return false end -- Collapsed, Hidden
+        local Parent = Current:GetParent()
+        if IsSafe(Parent) then
+            Current = Parent
+        else
+            -- The top of a widget tree: carry on with the user widget that
+            -- owns the tree (tree -> its outer).
+            local Owner = nil
+            pcall(function()
+                local Tree = Current:GetOuter()
+                local Candidate = IsSafe(Tree) and Tree:GetOuter()
+                if IsSafe(Candidate) and Candidate:IsA(UserWidgetClass)
+                    and Candidate:GetAddress() ~= Current:GetAddress() then
+                    Owner = Candidate
+                end
+            end)
+            if not Owner then return true end
+            Current = Owner
         end
     end
-    return Live
+    return true
+end
+
+-- One search of all the game's objects per pass, shared by every step of
+-- that pass (the buttons, the tiles, the sort): searching has its own risk.
+-- NewPass() starts a pass; the objects found are dropped with it, never kept
+-- for the next one.
+local PassAll = nil
+
+local function NewPass()
+    PassAll = nil
+end
+
+-- The storage widgets alive right now, by identity, that are on screen (or
+-- all of them with All): the game's windows and the test bench.
+local function LiveStorages(All)
+    if not PassAll then
+        PassAll = {}
+        for _, Storage in ipairs(FindAllOf("AvatarStorageWidget") or {}) do
+            if IsSafe(Storage) then
+                local Id = Identity(Storage)
+                if Id == TestBenchId or IsLiveWidget(Storage) then PassAll[Id] = Storage end
+            end
+        end
+    end
+    if All then return PassAll end
+    local Shown = {}
+    for Id, Storage in pairs(PassAll) do
+        if IsOnScreen(Storage) then Shown[Id] = Storage end
+    end
+    return Shown
 end
 local TestBenchColumns = nil
 
@@ -140,7 +274,7 @@ local TestBenchColumns = nil
 -- Text of a TextBlock, or nil. Reads the Text property first: calling
 -- GetText() while the game is still building the window failed in game.
 local function ReadText(TextBlock)
-    if not TextBlock or not TextBlock:IsValid() then return nil end
+    if not TextBlock or not IsSafe(TextBlock) then return nil end
     local Ok, Text = pcall(function() return TextBlock.Text:ToString() end)
     if Ok and type(Text) == "string" then return Text end
     Ok, Text = pcall(function() return TextBlock:GetText():ToString() end)
@@ -169,9 +303,9 @@ local function ReadSkillsFromTooltip(Tile)
     local Ok, Visibility = pcall(function() return Tile.ProfileImage:GetVisibility() end)
     if Ok and (Visibility == 1 or Visibility == 2) then return nil end -- Collapsed, Hidden
     local Tooltip = Tile.AvatarTooltipWidget
-    if not Tooltip or not Tooltip:IsValid() then return nil end
+    if not Tooltip or not IsSafe(Tooltip) then return nil end
     local Details = Tooltip.AvatarProfileDetailsWidget
-    if not Details or not Details:IsValid() then return nil end
+    if not Details or not IsSafe(Details) then return nil end
 
     local Values = { Current = {}, Max = {} }
     for _, Skill in ipairs(Skills) do
@@ -204,7 +338,7 @@ local function ReadRested(Tile)
     local Ok, Vitality = pcall(function()
         return Tile.AvatarTooltipWidget.AvatarProfileDetailsWidget.VitalityStatus
     end)
-    if not Ok or not Vitality or not Vitality:IsValid() then return nil end
+    if not Ok or not Vitality or not IsSafe(Vitality) then return nil end
     local Health = ReadBarPercent(Vitality.HealthBar)
     local Stamina = ReadBarPercent(Vitality.StaminaBar)
     if Health == nil or Stamina == nil then return nil end
@@ -259,10 +393,10 @@ end
 
 local function ForEachTile(Storage, Callback)
     local Grid = Storage.AvatarProfileGridPanel
-    if not Grid or not Grid:IsValid() then return end
+    if not Grid or not IsSafe(Grid) then return end
     Grid.Slots:ForEach(function(_, Element)
         local Slot = Element:get()
-        if Slot:IsValid() and Slot.Content:IsValid() then
+        if IsSafe(Slot) and IsSafe(Slot.Content) then
             Callback(Slot.Content, Slot)
         end
     end)
@@ -301,11 +435,11 @@ end
 local function LoadObject(Folder, Name)
     local Path = Folder .. Name .. "." .. Name
     local Object = StaticFindObject(Path)
-    if not Object or not Object:IsValid() then
+    if not Object or not IsSafe(Object) then
         LoadAsset(Folder .. Name)
         Object = StaticFindObject(Path)
     end
-    if Object and Object:IsValid() then return Object end
+    if Object and IsSafe(Object) then return Object end
     return nil
 end
 
@@ -313,8 +447,9 @@ end
 -- box (compared by address, without touching the bar). Bars of storages
 -- gone, or whose bar the game removed, are forgotten untouched.
 -- Returns { { Storage, Entry } }.
-local function LiveBars()
-    local Live = LiveStorages()
+-- With All, also the bars of windows not on screen (to recolour them).
+local function LiveBars(All)
+    local Live = LiveStorages(true)
     local Found = {}
     for Id, Entry in pairs(Bars) do
         local Storage = Live[Id]
@@ -322,20 +457,20 @@ local function LiveBars()
         if Storage then
             pcall(function()
                 local First = Storage.AvatarProfileGridPanel:GetParent():GetChildAt(0)
-                InPlace = First:IsValid() and First:GetAddress() == Entry.BarAddress
+                InPlace = IsSafe(First) and First:GetAddress() == Entry.BarAddress
             end)
         end
-        if InPlace then
-            Found[#Found + 1] = { Storage = Storage, Entry = Entry }
-        else
+        if not InPlace then
             Bars[Id] = nil
+        elseif All or IsOnScreen(Storage) then
+            Found[#Found + 1] = { Storage = Storage, Entry = Entry }
         end
     end
     return Found
 end
 
 local function RefreshButtonColors()
-    for _, Live in ipairs(LiveBars()) do
+    for _, Live in ipairs(LiveBars(true)) do
         local Entry = Live.Entry
         for _, Item in ipairs(Entry.Buttons) do
             local Active = Item.Mode == CurrentMode
@@ -357,7 +492,7 @@ local SlateCollapsed = 1
 local function SetTooltip(Button, Help)
     local Ok, Error = pcall(function()
         local Class = StaticFindObject(TooltipClass)
-        if not Class or not Class:IsValid() then
+        if not Class or not IsSafe(Class) then
             LoadAsset(TooltipAsset)
             Class = StaticFindObject(TooltipClass)
         end
@@ -383,7 +518,7 @@ local function HasBar(Storage, ScrollBox)
     local Entry = Bars[Identity(Storage)]
     if not Entry then return false end
     local First = ScrollBox:GetChildAt(0)
-    return First:IsValid() and First:GetAddress() == Entry.BarAddress
+    return IsSafe(First) and First:GetAddress() == Entry.BarAddress
 end
 
 -- Adds the button row to a storage widget. StyleTile is one of its tiles,
@@ -391,7 +526,7 @@ end
 local function AddSortBar(Storage, StyleTile)
     local Grid = Storage.AvatarProfileGridPanel
     local ScrollBox = Grid:GetParent()
-    if not ScrollBox:IsValid() or HasBar(Storage, ScrollBox) then return end
+    if not IsSafe(ScrollBox) or HasBar(Storage, ScrollBox) then return end
 
     local Tree = Storage.WidgetTree
     -- A wrap box: in narrow windows (4 columns) the buttons go on two rows.
@@ -519,14 +654,14 @@ local LabelTexts = {}
 local function FindChildAt(Panel, Address)
     for Index = 0, Panel:GetChildrenCount() - 1 do
         local Child = Panel:GetChildAt(Index)
-        if Child:IsValid() and Child:GetAddress() == Address then return Child end
+        if IsSafe(Child) and Child:GetAddress() == Address then return Child end
     end
     return nil
 end
 
 local function UpdateTileLabel(Tile, Values)
     local Overlay = Tile.OwnerTypeIcon:GetParent()
-    if not Overlay:IsValid() then return end
+    if not IsSafe(Overlay) then return end
 
     local TileId = Identity(Tile)
     local Label = LabelAddress[TileId] and FindChildAt(Overlay, LabelAddress[TileId])
@@ -645,10 +780,13 @@ local StallSeconds = 3
 
 local function SortAll()
     EnsurePollLoop()
+    if WorldIsSettling() then return end
+    NewPass()
     ForEachStorage(function(Storage)
         local Ok, Error = pcall(SortStorage, Storage)
         if not Ok then Log("sort failed on %s: %s", Storage:GetFullName(), tostring(Error)) end
     end)
+    NewPass()
 end
 
 -- Tiles are created one by one before the grid is complete, and the game
@@ -697,7 +835,7 @@ end
 local function AvatarIcons()
     local Icons = { Male = {}, Female = {} }
     local Globals = FindFirstOf("UIGlobals")
-    if Globals and Globals:IsValid() then
+    if Globals and IsSafe(Globals) then
         pcall(function()
             Globals.AvatarProfileIconMap:ForEach(function(Key, Value) Icons.Male[Key:get()] = Value:get() end)
             Globals.AvatarProfileIconMapFemale:ForEach(function(Key, Value) Icons.Female[Key:get()] = Value:get() end)
@@ -727,24 +865,24 @@ end
 
 local function OpenTestBench(Columns)
     local Class = StaticFindObject(StorageWidgetBPClass)
-    if not Class or not Class:IsValid() then
+    if not Class or not IsSafe(Class) then
         LoadAsset(StorageWidgetAsset)
         Class = StaticFindObject(StorageWidgetBPClass)
     end
-    if not Class or not Class:IsValid() then
+    if not Class or not IsSafe(Class) then
         Log("test bench: cannot load %s", StorageWidgetBPClass)
         return
     end
 
     local PlayerController = UEHelpers.GetPlayerController()
-    if not PlayerController or not PlayerController:IsValid() then
+    if not PlayerController or not IsSafe(PlayerController) then
         Log("test bench: no player controller yet")
         return
     end
 
     local Library = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
     local Widget = Library:Create(PlayerController, Class, PlayerController)
-    if not Widget or not Widget:IsValid() then
+    if not Widget or not IsSafe(Widget) then
         Log("test bench: widget creation failed")
         return
     end
@@ -752,6 +890,8 @@ local function OpenTestBench(Columns)
     pcall(function() Widget.PreferredNumColumns = Columns end)
     Widget:AddToViewport(100)
     TestBenchId = Identity(Widget)
+    -- The bench is a new storage: search again.
+    NewPass()
     TestBenchColumns = Columns
 
     -- Distinct names make it easy to follow each tile when it moves.
@@ -788,15 +928,15 @@ local function OpenTestBench(Columns)
         FakeSkills[Identity(Tile)] = Values
         if Count ~= AuxiliaryTile then FakeRested[Identity(Tile)] = math.random(2) == 1 end
 
-        if Tile.NameText:IsValid() then Tile.NameText:SetText(FText(Name)) end
-        if Texture and Tile.ProfileImage:IsValid() then
+        if IsSafe(Tile.NameText) then Tile.NameText:SetText(FText(Name)) end
+        if Texture and IsSafe(Tile.ProfileImage) then
             Tile.ProfileImage:SetBrushFromTexture(Texture, false)
         end
         -- Only a stack shows its count badge.
-        if Tile.StackSizeBox:IsValid() then
+        if IsSafe(Tile.StackSizeBox) then
             Tile.StackSizeBox:SetVisibility(Stack and SlateVisible or SlateHidden)
         end
-        if Stack and Tile.StackSizeText:IsValid() then Tile.StackSizeText:SetText(FText(Stack)) end
+        if Stack and IsSafe(Tile.StackSizeText) then Tile.StackSizeText:SetText(FText(Stack)) end
     end)
     Log("test bench open: %d columns, %d tiles with fake skills, mode %s", Columns, Count, Modes[CurrentMode])
 
@@ -804,7 +944,7 @@ local function OpenTestBench(Columns)
 end
 
 local function CloseTestBench()
-    local Bench = TestBenchId and LiveStorages()[TestBenchId]
+    local Bench = TestBenchId and LiveStorages(true)[TestBenchId]
     if Bench then Bench:RemoveFromParent() end
     TestBenchId = nil
     FakeSkills = {}
@@ -815,8 +955,9 @@ end
 RegisterDevKey(Key.F7, function()
     ExecuteInGameThread(function()
         local Ok, Error = pcall(function()
+            NewPass()
             -- Closed, then 6 columns (deployment), 4 columns (caravan), closed.
-            local Open = TestBenchId ~= nil and LiveStorages()[TestBenchId] ~= nil
+            local Open = TestBenchId ~= nil and LiveStorages(true)[TestBenchId] ~= nil
             local Columns = Open and TestBenchColumns
             if Open then CloseTestBench() end
             if not Open then
@@ -826,6 +967,7 @@ RegisterDevKey(Key.F7, function()
             end
         end)
         if not Ok then Log("test bench error: %s", tostring(Error)) end
+        NewPass()
     end)
 end)
 
@@ -855,7 +997,7 @@ RegisterDevKey(Key.F6, function()
 end)
 
 -- A click is a press followed by a release with the mouse still over the
--- button. Polled every 30 ms, only while at least one bar exists.
+-- button. Polled every 50 ms, only while at least one bar is on screen.
 local PollQueuedAt = nil
 local function PollButtons()
     for _, Live in ipairs(LiveBars()) do
@@ -896,12 +1038,14 @@ local WatchTicks = 0
 local ResortLogged = 0
 local function WatchLayouts()
     WatchTicks = WatchTicks + 1
-    local Periodic = WatchTicks % 33 == 0
-    local Live = LiveStorages()
+    local Periodic = WatchTicks % 5 == 0
+    local Live = LiveStorages(true)
     for Id, Layout in pairs(Layouts) do
         local Storage = Live[Id]
         if not Storage then
             Layouts[Id] = nil
+        elseif not IsOnScreen(Storage) then
+            -- A closed window: left alone until it is shown again.
         elseif Periodic or GameMovedTiles(Storage, Layout) then
             if not Periodic and ResortLogged < 5 then
                 ResortLogged = ResortLogged + 1
@@ -916,10 +1060,26 @@ local function WatchLayouts()
     end
 end
 
+-- Every 50 ms: the buttons (a click must not be missed). Every 200 ms: the
+-- tiles, to notice when the game put them back in its order. The fewer
+-- reads, the safer.
+-- While no avatar window is on screen, look for one twice a second only.
+local PollTicks = 0
+local AnyShown = false
+local NextIdleSearch = 0
 local function PollUi()
     PollQueuedAt = nil
-    WatchLayouts()
+    if WorldIsSettling() then return end
+    local Now = os.clock()
+    if not AnyShown and Now < NextIdleSearch then return end
+    NextIdleSearch = Now + 0.5
+    NewPass()
+    AnyShown = next(LiveStorages()) ~= nil
+    if not AnyShown then return end
+    PollTicks = PollTicks + 1
+    if PollTicks % 4 == 0 then WatchLayouts() end
     PollButtons()
+    NewPass()
 end
 
 local function PollTick()
@@ -941,7 +1101,7 @@ end
 local LastLoopTick = nil
 local function StartPollLoop()
     LastLoopTick = os.time()
-    LoopAsync(30, function()
+    LoopAsync(50, function()
         LastLoopTick = os.time()
         local Ok, Error = pcall(PollTick)
         if not Ok then Log("poll loop error: %s", tostring(Error)) end
@@ -982,7 +1142,7 @@ local function ProbeTile(Tile, Slot)
     end
     pcall(function()
         local Resource = Tile.ProfileImage.Brush.ResourceObject
-        Looks[#Looks + 1] = "image " .. (Resource:IsValid() and Resource:GetFName():ToString() or "none")
+        Looks[#Looks + 1] = "image " .. (IsSafe(Resource) and Resource:GetFName():ToString() or "none")
     end)
     -- Since the November 2026 patch the tile has DisableEmptyColor and
     -- DisableInaccessibleColor (a dead avatar awaiting ransom?): log the
@@ -999,12 +1159,12 @@ local function ProbeTile(Tile, Slot)
     pcall(function() Looks[#Looks + 1] = "bounty icon vis " .. Tile.BountyEligibleIcon:GetVisibility() end)
     Log("    %s", table.concat(Looks, ", "))
     local Tooltip = Tile.AvatarTooltipWidget
-    if not Tooltip or not Tooltip:IsValid() then
+    if not Tooltip or not IsSafe(Tooltip) then
         Log("    no tooltip widget yet")
         return
     end
     local Details = Tooltip.AvatarProfileDetailsWidget
-    if not Details or not Details:IsValid() then
+    if not Details or not IsSafe(Details) then
         Log("    tooltip has no details widget")
         return
     end
@@ -1026,6 +1186,7 @@ end
 
 RegisterDevKey(Key.F8, function()
     ExecuteInGameThread(function()
+        NewPass()
         local Found = 0
         ForEachStorage(function(Storage)
             Found = Found + 1

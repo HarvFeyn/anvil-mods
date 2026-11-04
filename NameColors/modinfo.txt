@@ -1,0 +1,7 @@
+name = NameColors
+version = 0.1.0
+description = Changes the colours of player names: each faction and your guild.
+setting = Pagans | Pagans | colour | 0.23,0.86,0.12
+setting = Ancients | Ancients | colour | 1.00,0.17,0.16
+setting = Remnants | Remnants | colour | 0.18,0.41,1.00
+setting = Guild | Guild members | colour | 1.00,0.58,0.00

@@ -1,3 +1,0 @@
-name = MapFilter
-version = 0.1.0
-description = Shows or hides each kind of icon on the map and the compass.
