@@ -11,6 +11,14 @@ $ErrorActionPreference = 'Stop'
 $ModsDir = 'C:\Program Files (x86)\Steam\steamapps\common\Anvil Playtest\Anvil\Binaries\Win64\ue4ss\Mods'
 if (-not (Test-Path $ModsDir)) { throw "UE4SS Mods folder not found: $ModsDir" }
 
+# Turns on the mods' developer keys (probes, test bench) on this machine
+# only: released zips and the pack never contain this file.
+$DevMarker = Join-Path $ModsDir 'AnvilModsDev.txt'
+if (-not (Test-Path $DevMarker)) {
+    Set-Content -Path $DevMarker -Value 'Developer keys of the Anvil mods are on. Delete this file to turn them off.' -Encoding ascii
+    Write-Output "Created $DevMarker"
+}
+
 $Mods = Get-ChildItem -Directory $PSScriptRoot | Where-Object { Test-Path (Join-Path $_.FullName 'Scripts\main.lua') }
 
 foreach ($Mod in $Mods) {

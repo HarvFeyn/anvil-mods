@@ -32,11 +32,3 @@ skipped that wait).
   server, and one click sends one request, as in the game.
 - It sends nothing by itself and does not change what the game sends: the
   requests are the ones you make with your own clicks.
-
-## Keys
-
-| Key | Action |
-|-----|--------|
-| Ctrl + F5 | With the bounty board open: write the window's layout, then for 6 seconds what changes in it, to `ue4ss\UE4SS.log` (for bug reports) |
-
-On a laptop where F keys control volume or brightness, hold **Fn** too.

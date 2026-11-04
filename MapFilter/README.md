@@ -27,11 +27,3 @@ those icons on the map and on the compass; tick it again to show them.
 
 It only changes what your own screen shows. Nothing is sent to the game's
 server, and icons are never moved or removed from the game's data.
-
-## Keys
-
-| Key | Action |
-|-----|--------|
-| Ctrl + F10 | Write the map's layout and every map and compass icon to `ue4ss\UE4SS.log` (for bug reports) |
-
-On a laptop where F keys control volume or brightness, hold **Fn** too.

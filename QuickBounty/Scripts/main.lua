@@ -15,7 +15,8 @@
     answered: the game kept it greyed ~2 s more, a delay of the window only
     (closing and opening the window skipped it). Same requests as the game.
 
-    Keys (game window focused):
+    Developer keys (game window focused; only with ue4ss\Mods\AnvilModsDev.txt,
+    which install.ps1 creates):
       Ctrl+F5  probe: log the bounty board window's layout, then for 6 s
                every 100 ms what changes in it (hand in a bounty meanwhile)
 --]]
@@ -25,6 +26,24 @@ local Version = "0.1.0"
 
 local function Log(Format, ...)
     print("[QuickBounty] " .. string.format(Format, ...) .. "\n")
+end
+
+-- Developer keys (probes, test bench) only on the developer's machine:
+-- install.ps1 leaves ue4ss\Mods\AnvilModsDev.txt there. Released zips and
+-- the pack do not have it, so players get no extra keys.
+local DevTools = false
+do
+    local Source = debug.getinfo(1, "S").source
+    local ModsFolder = Source and string.match(Source, "^@(.*[\\/])[^\\/]+[\\/]Scripts[\\/][^\\/]+$")
+    local Handle = ModsFolder and io.open(ModsFolder .. "AnvilModsDev.txt", "r")
+    if Handle then
+        Handle:close()
+        DevTools = true
+    end
+end
+
+local function RegisterDevKey(KeyName, Callback)
+    if DevTools then RegisterKeyBind(KeyName, { ModifierKey.CONTROL }, Callback) end
 end
 
 local Visibilities = { [0] = "Visible", "Collapsed", "Hidden", "HitTestInvisible", "SelfHitTestInvisible" }
@@ -142,7 +161,7 @@ end
 
 local Sampling = false
 
-RegisterKeyBind(Key.F5, { ModifierKey.CONTROL }, function()
+RegisterDevKey(Key.F5, function()
     ExecuteInGameThread(function()
         local Ok, Error = pcall(function()
             if Sampling then return end
@@ -314,4 +333,4 @@ LoopAsync(50, function()
     return false
 end)
 
-Log("v%s loaded (Ctrl+F5 probe)", Version)
+Log("v%s loaded%s", Version, DevTools and " (dev key: Ctrl+F5 probe)" or "")

@@ -8,7 +8,8 @@
     Click Enable or Disable next to a mod. Only mods with a modinfo.txt are
     listed; ModManager itself is locked.
 
-    Keys (game window focused):
+    Developer keys (game window focused; only with ue4ss\Mods\AnvilModsDev.txt,
+    which install.ps1 creates):
       Ctrl+F9  probe: log the main menu's layout and the installed mods
 --]]
 
@@ -19,6 +20,24 @@ local Version = "0.1.2"
 
 local function Log(Format, ...)
     print("[ModManager] " .. string.format(Format, ...) .. "\n")
+end
+
+-- Developer keys (probes, test bench) only on the developer's machine:
+-- install.ps1 leaves ue4ss\Mods\AnvilModsDev.txt there. Released zips and
+-- the pack do not have it, so players get no extra keys.
+local DevTools = false
+do
+    local Source = debug.getinfo(1, "S").source
+    local ModsFolder = Source and string.match(Source, "^@(.*[\\/])[^\\/]+[\\/]Scripts[\\/][^\\/]+$")
+    local Handle = ModsFolder and io.open(ModsFolder .. "AnvilModsDev.txt", "r")
+    if Handle then
+        Handle:close()
+        DevTools = true
+    end
+end
+
+local function RegisterDevKey(KeyName, Callback)
+    if DevTools then RegisterKeyBind(KeyName, { ModifierKey.CONTROL }, Callback) end
 end
 
 ------------------------------------------------------------------------
@@ -694,7 +713,7 @@ local function LogTree(Widget, Depth)
     end
 end
 
-RegisterKeyBind(Key.F9, { ModifierKey.CONTROL }, function()
+RegisterDevKey(Key.F9, function()
     ExecuteInGameThread(function()
         local Ok, Error = pcall(function()
             local Menu = FindMenu()
@@ -712,4 +731,4 @@ RegisterKeyBind(Key.F9, { ModifierKey.CONTROL }, function()
 end)
 
 StartWatchingScreens()
-Log("v%s loaded (Ctrl+F9 probe)", Version)
+Log("v%s loaded%s", Version, DevTools and " (dev key: Ctrl+F9 probe)" or "")

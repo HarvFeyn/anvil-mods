@@ -44,16 +44,6 @@ It only moves tiles on your screen and adds the buttons and labels.
 Clicking a tile, Ctrl + click to swap inventories, and tooltips work as
 in the unmodded game. Nothing is sent to the server.
 
-## Keys
-
-| Key | Action |
-|-----|--------|
-| Ctrl + F6 | Next sort mode |
-| Ctrl + F7 | Test window with fake avatars (works from the main menu): 6 columns, then 4, then closed |
-| Ctrl + F8 | Write what the mod reads to `ue4ss\UE4SS.log` (for bug reports) |
-
-On a laptop where F keys control volume or brightness, hold **Fn** too.
-
 ## Known limitations
 
 - The game sometimes puts the tiles back in its own order; the mod sorts

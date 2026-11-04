@@ -8,7 +8,8 @@
     A row of sort buttons is added above each avatar grid, with a "Rested"
     check box that hides the avatars not at full health and stamina.
 
-    Keys (game window focused):
+    Developer keys (game window focused; only with ue4ss\Mods\AnvilModsDev.txt,
+    which install.ps1 creates):
       Ctrl+F6  next sort mode (Level, then each skill)
       Ctrl+F7  test bench (works from the main menu): 6 columns like the
                deployment pop-up, then 4 like the caravan, then closed
@@ -22,6 +23,24 @@ local Version = "0.2.1"
 
 local function Log(Format, ...)
     print("[AvatarSort] " .. string.format(Format, ...) .. "\n")
+end
+
+-- Developer keys (probes, test bench) only on the developer's machine:
+-- install.ps1 leaves ue4ss\Mods\AnvilModsDev.txt there. Released zips and
+-- the pack do not have it, so players get no extra keys.
+local DevTools = false
+do
+    local Source = debug.getinfo(1, "S").source
+    local ModsFolder = Source and string.match(Source, "^@(.*[\\/])[^\\/]+[\\/]Scripts[\\/][^\\/]+$")
+    local Handle = ModsFolder and io.open(ModsFolder .. "AnvilModsDev.txt", "r")
+    if Handle then
+        Handle:close()
+        DevTools = true
+    end
+end
+
+local function RegisterDevKey(KeyName, Callback)
+    if DevTools then RegisterKeyBind(KeyName, { ModifierKey.CONTROL }, Callback) end
 end
 
 -- No object of the game is kept from one poll to the next: the game
@@ -793,7 +812,7 @@ local function CloseTestBench()
     Log("test bench closed")
 end
 
-RegisterKeyBind(Key.F7, { ModifierKey.CONTROL }, function()
+RegisterDevKey(Key.F7, function()
     ExecuteInGameThread(function()
         local Ok, Error = pcall(function()
             -- Closed, then 6 columns (deployment), 4 columns (caravan), closed.
@@ -829,7 +848,7 @@ local function SetMode(Mode)
     SortAll()
 end
 
-RegisterKeyBind(Key.F6, { ModifierKey.CONTROL }, function()
+RegisterDevKey(Key.F6, function()
     ExecuteInGameThread(function()
         SetMode(CurrentMode % #Modes + 1)
     end)
@@ -1005,7 +1024,7 @@ local function ProbeTile(Tile, Slot)
     Log("    %s, rested %s", table.concat(Bars, ", "), tostring(ReadRested(Tile)))
 end
 
-RegisterKeyBind(Key.F8, { ModifierKey.CONTROL }, function()
+RegisterDevKey(Key.F8, function()
     ExecuteInGameThread(function()
         local Found = 0
         ForEachStorage(function(Storage)
@@ -1041,4 +1060,5 @@ local HookOk, HookError = pcall(RegisterHook,
     "/Script/Anvil.DeploymentAvatarWidget:OnDeploymentAvatarDataAtEntityUpdated", OnDeploymentData)
 if not HookOk then Log("deployment hook not registered: %s", tostring(HookError)) end
 
-Log("v%s loaded, sort mode %s (Ctrl+F6 mode, Ctrl+F7 test bench, Ctrl+F8 probe)", Version, Modes[CurrentMode])
+Log("v%s loaded, sort mode %s%s", Version, Modes[CurrentMode],
+    DevTools and " (dev keys: Ctrl+F6 mode, Ctrl+F7 test bench, Ctrl+F8 probe)" or "")

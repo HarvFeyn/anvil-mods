@@ -7,7 +7,8 @@
     icon seen so far, with the icon itself. Untick a kind to hide it. The
     choices are saved in settings.txt, next to this mod's Scripts folder.
 
-    Keys (game window focused):
+    Developer keys (game window focused; only with ue4ss\Mods\AnvilModsDev.txt,
+    which install.ps1 creates):
       Ctrl+F10  probe: log the map's layout and every map and compass icon
 --]]
 
@@ -16,6 +17,24 @@ local Version = "0.1.0"
 
 local function Log(Format, ...)
     print("[MapFilter] " .. string.format(Format, ...) .. "\n")
+end
+
+-- Developer keys (probes, test bench) only on the developer's machine:
+-- install.ps1 leaves ue4ss\Mods\AnvilModsDev.txt there. Released zips and
+-- the pack do not have it, so players get no extra keys.
+local DevTools = false
+do
+    local Source = debug.getinfo(1, "S").source
+    local ModsFolder = Source and string.match(Source, "^@(.*[\\/])[^\\/]+[\\/]Scripts[\\/][^\\/]+$")
+    local Handle = ModsFolder and io.open(ModsFolder .. "AnvilModsDev.txt", "r")
+    if Handle then
+        Handle:close()
+        DevTools = true
+    end
+end
+
+local function RegisterDevKey(KeyName, Callback)
+    if DevTools then RegisterKeyBind(KeyName, { ModifierKey.CONTROL }, Callback) end
 end
 
 -- EMapIconType (Anvil_enums.hpp, game patch of 2026-11-03).
@@ -634,7 +653,7 @@ local function LogTree(Widget, Depth)
     for Index = 0, Count - 1 do LogTree(Widget:GetChildAt(Index), Depth + 1) end
 end
 
-RegisterKeyBind(Key.F10, { ModifierKey.CONTROL }, function()
+RegisterDevKey(Key.F10, function()
     ExecuteInGameThread(function()
         local Ok, Error = pcall(function()
             Log("probe: settings %s", tostring(SettingsPath))
@@ -667,4 +686,4 @@ RegisterKeyBind(Key.F10, { ModifierKey.CONTROL }, function()
 end)
 
 LoadSettings()
-Log("v%s loaded (Ctrl+F10 probe), settings %s", Version, tostring(SettingsPath))
+Log("v%s loaded%s, settings %s", Version, DevTools and " (dev key: Ctrl+F10 probe)" or "", tostring(SettingsPath))

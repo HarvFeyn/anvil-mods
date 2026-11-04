@@ -45,11 +45,3 @@ manager never changes them.
 It only reads and writes files in `ue4ss\Mods\`: the mod's `enabled.txt`,
 and its line in `mods.txt` when it has one. It does not connect to the
 internet, and nothing is sent to the game's server.
-
-## Keys
-
-| Key | Action |
-|-----|--------|
-| Ctrl + F9 | Write the main menu's layout and the listed mods to `ue4ss\UE4SS.log` (for bug reports) |
-
-On a laptop where F keys control volume or brightness, hold **Fn** too.
