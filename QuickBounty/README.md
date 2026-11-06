@@ -6,7 +6,7 @@ bounty board.
 **[Download QuickBounty.zip](../../../releases/latest/download/QuickBounty.zip)**
 · [How to install](../README.md#installation)
 
-Version 0.1.1, tested with the Anvil Empires playtest of November 2026 and
+Version 0.1.2, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
 ## What it does

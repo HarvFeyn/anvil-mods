@@ -16,7 +16,7 @@
 local UEHelpers = require("UEHelpers")
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.2.0"
+local Version = "0.2.1"
 
 local function Log(Format, ...)
     print("[ModManager] " .. string.format(Format, ...) .. "\n")
@@ -368,13 +368,11 @@ local function StartWatchingScreens()
         NotifyOnNewObject("/Script/Anvil.OpeningScreen", function()
             -- The new screen is found again once built, among the live
             -- objects; templates are created too: only runtime widgets.
-            ExecuteWithDelay(500, function()
-                ExecuteInGameThread(function()
-                    pcall(function()
-                        for _, Screen in ipairs(FindAllOf("OpeningScreen") or {}) do
-                            if IsSafe(Screen) and IsLiveWidget(Screen) then WatchScreen(Screen) end
-                        end
-                    end)
+            ExecuteInGameThreadWithDelay(500, function()
+                pcall(function()
+                    for _, Screen in ipairs(FindAllOf("OpeningScreen") or {}) do
+                        if IsSafe(Screen) and IsLiveWidget(Screen) then WatchScreen(Screen) end
+                    end
                 end)
             end)
         end)
@@ -1088,17 +1086,12 @@ local function PollUi()
     end
 end
 
-local StallSeconds = 3
-local PollQueuedAt = nil
-LoopAsync(50, function()
-    if PollQueuedAt and os.time() - PollQueuedAt < StallSeconds then return false end
-    PollQueuedAt = os.time()
-    ExecuteInGameThread(function()
-        PollQueuedAt = nil
-        local Ok, Error = pcall(PollUi)
-        if not Ok then Log("poll error: %s", tostring(Error)) end
-    end)
-    return false
+-- On the game thread, between frames: UE4SS's async loop (LoopAsync) ran
+-- Lua on its own thread while the game thread ran ours, which corrupted the
+-- Lua state and crashed the game now and then.
+LoopInGameThreadWithDelay(50, function()
+    local Ok, Error = pcall(PollUi)
+    if not Ok then Log("poll error: %s", tostring(Error)) end
 end)
 
 ------------------------------------------------------------------------

@@ -6,7 +6,7 @@ main menu.
 **[Download ModManager.zip](../../../releases/latest/download/ModManager.zip)**
 · [How to install](../README.md#installation)
 
-Version 0.2.0, tested with the Anvil Empires playtest of November 2026 and
+Version 0.2.1, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
 ## What it does

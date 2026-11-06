@@ -19,7 +19,7 @@
 local UEHelpers = require("UEHelpers")
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.2.2"
+local Version = "0.2.5"
 
 local function Log(Format, ...)
     print("[AvatarSort] " .. string.format(Format, ...) .. "\n")
@@ -391,15 +391,24 @@ end
 -- Reordering the grid
 ------------------------------------------------------------------------
 
+-- The tiles are listed first, through the engine's own GetChildAt (it checks
+-- its bounds), then handled: UE4SS's TArray ForEach walked the grid's Slots
+-- array while our code ran on each tile, and a crash of 2026-11-06 happened
+-- inside that walk (several older ones inside its callback).
 local function ForEachTile(Storage, Callback)
     local Grid = Storage.AvatarProfileGridPanel
     if not Grid or not IsSafe(Grid) then return end
-    Grid.Slots:ForEach(function(_, Element)
-        local Slot = Element:get()
-        if IsSafe(Slot) and IsSafe(Slot.Content) then
-            Callback(Slot.Content, Slot)
+    local Tiles = {}
+    for Index = 0, Grid:GetChildrenCount() - 1 do
+        local Tile = Grid:GetChildAt(Index)
+        if IsSafe(Tile) then
+            local Slot = Tile.Slot
+            if IsSafe(Slot) then Tiles[#Tiles + 1] = { Tile = Tile, Slot = Slot } end
         end
-    end)
+    end
+    for _, Entry in ipairs(Tiles) do
+        if IsSafe(Entry.Tile) and IsSafe(Entry.Slot) then Callback(Entry.Tile, Entry.Slot) end
+    end
 end
 
 ------------------------------------------------------------------------
@@ -726,6 +735,13 @@ local function SortStorage(Storage)
         -- nor an avatar whose bars cannot be read.
         local Hidden = RestedOnly and Values ~= nil and not Auxiliary and ReadRested(Tile) == false
         SetTileHidden(Tile, Hidden)
+        -- A tile the game itself hid (seen 2026-11-05 with avatars being moved
+        -- to another place: their tiles vanished but kept their skills) still
+        -- holds its cell in the grid: send it after the shown avatars too.
+        if not Hidden and HiddenTiles[TileId] == nil then
+            local VisOk, Visibility = pcall(function() return Tile:GetVisibility() end)
+            if VisOk and (Visibility == 1 or Visibility == 2) then Hidden = true end -- Collapsed, Hidden
+        end
         Entries[#Entries + 1] = {
             TileId = TileId,
             Slot = Slot,
@@ -770,16 +786,11 @@ local function ForEachStorage(Callback)
     for _, Storage in pairs(LiveStorages()) do Callback(Storage) end
 end
 
--- Defined with the poll loop below; keeps that loop alive.
-local EnsurePollLoop
-
--- A callback handed to the game thread or to a delay can be lost (seen once
--- in a long session: the poll stopped for good, with no error). Anything
--- waiting on one gives up after this long.
+-- How long a scheduled batch of sorts may stay pending before a new tile
+-- schedules another one anyway.
 local StallSeconds = 3
 
 local function SortAll()
-    EnsurePollLoop()
     if WorldIsSettling() then return end
     NewPass()
     ForEachStorage(function(Storage)
@@ -799,11 +810,12 @@ local function ScheduleSort()
     if SortPendingAt and os.time() - SortPendingAt < Delayed + StallSeconds then return end
     SortPendingAt = os.time()
     for Index, Delay in ipairs(SortDelays) do
-        ExecuteWithDelay(Delay, function()
-            ExecuteInGameThread(function()
-                if Index == #SortDelays then SortPendingAt = nil end
-                SortAll()
-            end)
+        -- On the game thread, like every Lua call of these mods: UE4SS's
+        -- async functions (LoopAsync, ExecuteWithDelay) run Lua on another
+        -- thread at the same time, which corrupts the Lua state.
+        ExecuteInGameThreadWithDelay(Delay, function()
+            if Index == #SortDelays then SortPendingAt = nil end
+            SortAll()
         end)
     end
 end
@@ -998,7 +1010,6 @@ end)
 
 -- A click is a press followed by a release with the mouse still over the
 -- button. Polled every 50 ms, only while at least one bar is on screen.
-local PollQueuedAt = nil
 local function PollButtons()
     for _, Live in ipairs(LiveBars()) do
         local Entry = Live.Entry
@@ -1068,7 +1079,6 @@ local PollTicks = 0
 local AnyShown = false
 local NextIdleSearch = 0
 local function PollUi()
-    PollQueuedAt = nil
     if WorldIsSettling() then return end
     local Now = os.clock()
     if not AnyShown and Now < NextIdleSearch then return end
@@ -1082,40 +1092,16 @@ local function PollUi()
     NewPass()
 end
 
+-- The poll runs on the game thread, between frames: UE4SS's async loop
+-- (LoopAsync) ran Lua on its own thread while the game thread ran ours,
+-- which corrupted the Lua state and crashed the game now and then.
 local function PollTick()
     if next(Bars) == nil and next(Layouts) == nil then return end
-    if PollQueuedAt then
-        if os.time() - PollQueuedAt < StallSeconds then return end
-        Log("poll callback was lost, queueing it again")
-    end
-    PollQueuedAt = os.time()
-    ExecuteInGameThread(function()
-        local Ok, Error = pcall(PollUi)
-        if not Ok then
-            PollQueuedAt = nil
-            Log("poll error: %s", tostring(Error))
-        end
-    end)
+    local Ok, Error = pcall(PollUi)
+    if not Ok then Log("poll error: %s", tostring(Error)) end
 end
 
-local LastLoopTick = nil
-local function StartPollLoop()
-    LastLoopTick = os.time()
-    LoopAsync(50, function()
-        LastLoopTick = os.time()
-        local Ok, Error = pcall(PollTick)
-        if not Ok then Log("poll loop error: %s", tostring(Error)) end
-        return false
-    end)
-end
-
-EnsurePollLoop = function()
-    if os.time() - LastLoopTick < StallSeconds then return end
-    Log("poll loop had stopped, starting it again")
-    StartPollLoop()
-end
-
-StartPollLoop()
+LoopInGameThreadWithDelay(50, PollTick)
 
 ------------------------------------------------------------------------
 -- Probe (Ctrl+F8): logs what can be read, to settle in a test session
@@ -1217,9 +1203,12 @@ local function OnDeploymentData(_, Success, Data)
     if not Ok then Log("deployment hook error: %s", tostring(Error)) end
 end
 
-local HookOk, HookError = pcall(RegisterHook,
-    "/Script/Anvil.DeploymentAvatarWidget:OnDeploymentAvatarDataAtEntityUpdated", OnDeploymentData)
-if not HookOk then Log("deployment hook not registered: %s", tostring(HookError)) end
+-- Diagnostics only (it never fired in play): developer installs only.
+if DevTools then
+    local HookOk, HookError = pcall(RegisterHook,
+        "/Script/Anvil.DeploymentAvatarWidget:OnDeploymentAvatarDataAtEntityUpdated", OnDeploymentData)
+    if not HookOk then Log("deployment hook not registered: %s", tostring(HookError)) end
+end
 
 Log("v%s loaded, sort mode %s%s", Version, Modes[CurrentMode],
     DevTools and " (dev keys: Ctrl+F6 mode, Ctrl+F7 test bench, Ctrl+F8 probe)" or "")

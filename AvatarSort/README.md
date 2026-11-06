@@ -6,7 +6,7 @@ skill on its tile.
 **[Download AvatarSort.zip](../../../releases/latest/download/AvatarSort.zip)**
 · [How to install](../README.md#installation)
 
-Version 0.2.2, tested with the Anvil Empires playtest of November 2026 and
+Version 0.2.5, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
 ## What it does

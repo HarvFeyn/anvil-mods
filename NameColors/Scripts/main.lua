@@ -13,7 +13,7 @@
 --]]
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.1.0"
+local Version = "0.1.1"
 
 local function Log(Format, ...)
     print("[NameColors] " .. string.format(Format, ...) .. "\n")
@@ -396,19 +396,12 @@ local function ApplyColours()
 end
 
 -- Once a second: picks up a new HUD (after a change of area) and changes
--- made in ModManager. A callback queued to the game thread can be lost, so
--- a stuck queue is retried after a few seconds.
-local StallSeconds = 3
-local PollQueuedAt = nil
-LoopAsync(1000, function()
-    if PollQueuedAt and os.time() - PollQueuedAt < StallSeconds then return false end
-    PollQueuedAt = os.time()
-    ExecuteInGameThread(function()
-        PollQueuedAt = nil
-        local Ok, Error = pcall(ApplyColours)
-        if not Ok then Log("apply error: %s", tostring(Error)) end
-    end)
-    return false
+-- made in ModManager. On the game thread, between frames: UE4SS's async
+-- loop (LoopAsync) ran Lua on its own thread while the game thread ran ours,
+-- which corrupted the Lua state and crashed the game now and then.
+LoopInGameThreadWithDelay(1000, function()
+    local Ok, Error = pcall(ApplyColours)
+    if not Ok then Log("apply error: %s", tostring(Error)) end
 end)
 
 Log("v%s loaded%s, settings %s", Version, DevTools and " (dev key: Ctrl+F3 probe)" or "", tostring(SettingsPath))

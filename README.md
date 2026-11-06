@@ -53,7 +53,7 @@ All releases and their changes: [Releases](../../releases).
    with their versions, and turns them on or off.
 
 To check that a mod is running, open `ue4ss\UE4SS.log`: it should contain
-a line such as `[AvatarSort] v0.2.0 loaded`.
+a line such as `[AvatarSort] v0.2.3 loaded`.
 
 ### Already using UE4SS?
 

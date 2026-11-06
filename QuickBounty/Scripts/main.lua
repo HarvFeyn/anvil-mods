@@ -22,7 +22,7 @@
 --]]
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.1.1"
+local Version = "0.1.2"
 
 local function Log(Format, ...)
     print("[QuickBounty] " .. string.format(Format, ...) .. "\n")
@@ -276,7 +276,7 @@ RegisterDevKey(Key.F5, function()
                     if not SampleOk then Log("sample error: %s", tostring(SampleError)) end
                     Samples = Samples + 1
                     if Samples < 60 then
-                        ExecuteWithDelay(100, Sample)
+                        ExecuteInGameThreadWithDelay(100, Sample)
                     else
                         Sampling = false
                         Log("probe done")
@@ -408,19 +408,12 @@ local function PollWindow()
     Log("hid '%s'%s", Message, Ok and "" or " (by hand: the game's hide function failed)")
 end
 
--- A callback queued to the game thread can be lost, so a stuck queue is
--- retried after a few seconds.
-local StallSeconds = 3
-local PollQueuedAt = nil
-LoopAsync(50, function()
-    if PollQueuedAt and os.time() - PollQueuedAt < StallSeconds then return false end
-    PollQueuedAt = os.time()
-    ExecuteInGameThread(function()
-        PollQueuedAt = nil
-        local Ok, Error = pcall(PollWindow)
-        if not Ok then Log("poll error: %s", tostring(Error)) end
-    end)
-    return false
+-- On the game thread, between frames: UE4SS's async loop (LoopAsync) ran
+-- Lua on its own thread while the game thread ran ours, which corrupted the
+-- Lua state and crashed the game now and then.
+LoopInGameThreadWithDelay(50, function()
+    local Ok, Error = pcall(PollWindow)
+    if not Ok then Log("poll error: %s", tostring(Error)) end
 end)
 
 Log("v%s loaded%s", Version, DevTools and " (dev key: Ctrl+F5 probe)" or "")
