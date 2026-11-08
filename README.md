@@ -15,12 +15,13 @@ Small client-side mods for **Anvil Empires**, made with
 
 ## Mods
 
-| Mod | What it does | Download |
-|-----|--------------|----------|
-| [AvatarSort](AvatarSort/README.md) | Sorts avatar lists by level or by skill, and shows each avatar's value/max on its tile | [AvatarSort.zip](../../releases/latest/download/AvatarSort.zip) |
-| [ModManager](ModManager/README.md) | Adds a Mods button to the main menu to turn these mods on or off, see their versions and change their settings | [ModManager.zip](../../releases/latest/download/ModManager.zip) |
-| [QuickBounty](QuickBounty/README.md) | Removes the pause after handing in a bounty on the bounty board | [QuickBounty.zip](../../releases/latest/download/QuickBounty.zip) |
-| [NameColors](NameColors/README.md) | Lets you choose the colours of player names: each faction and your guild | [NameColors.zip](../../releases/latest/download/NameColors.zip) |
+| Mod | What it does | Author | Download |
+|-----|--------------|--------|----------|
+| [AvatarSort](AvatarSort/README.md) | Sorts avatar lists by level or by skill, and shows each avatar's value/max on its tile | [@HarvFeyn](https://github.com/HarvFeyn) | [AvatarSort.zip](../../releases/latest/download/AvatarSort.zip) |
+| [HouseScreenSorter](HouseScreenSorter/README.md) | Sorts family house members by role and alphabetically, with an online-only filter button | [@gabrdeux](https://github.com/gabrdeux) | [HouseScreenSorter.zip](../../releases/latest/download/HouseScreenSorter.zip) |
+| [ModManager](ModManager/README.md) | Adds a Mods button to the main menu to turn these mods on or off, see their versions and change their settings | [@HarvFeyn](https://github.com/HarvFeyn) | [ModManager.zip](../../releases/latest/download/ModManager.zip) |
+| [NameColors](NameColors/README.md) | Lets you choose the colours of player names: each faction and your guild | [@HarvFeyn](https://github.com/HarvFeyn) | [NameColors.zip](../../releases/latest/download/NameColors.zip) |
+| [QuickBounty](QuickBounty/README.md) | Removes the pause after handing in a bounty on the bounty board | [@HarvFeyn](https://github.com/HarvFeyn) | [QuickBounty.zip](../../releases/latest/download/QuickBounty.zip) |
 
 All releases and their changes: [Releases](../../releases).
 
@@ -43,6 +44,7 @@ All releases and their changes: [Releases](../../releases).
        ├── UE4SS.dll
        └── Mods\
            ├── AvatarSort\
+           ├── HouseScreenSorter\
            ├── ModManager\
            ├── NameColors\
            ├── QuickBounty\
