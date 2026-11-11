@@ -5,8 +5,9 @@
     by changing their row and column. It never creates, removes or clicks a
     tile, and never calls anything that talks to the server.
 
-    A row of sort buttons is added above each avatar grid, with a "Rested"
-    check box that hides the avatars not at full health and stamina.
+    A row of sort buttons is added above each avatar grid, and under it two
+    filter check boxes: "Rested" (only avatars whose maximum health and stamina are full)
+    and "Personal" (only the player's own avatars).
 
     Developer keys (game window focused; only with ue4ss\Mods\AnvilModsDev.txt,
     which install.ps1 creates):
@@ -19,7 +20,7 @@
 local UEHelpers = require("UEHelpers")
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.2.5"
+local Version = "0.3.0"
 
 local function Log(Format, ...)
     print("[AvatarSort] " .. string.format(Format, ...) .. "\n")
@@ -85,10 +86,16 @@ end
 local ResumeSeconds = 0.5
 local Loading = false
 local ResumeAt = 0
+-- Set at each change of area: the tile caches (keyed by identity) are
+-- emptied before the next sort. The game rebuilds every window then, and a
+-- new designer tile (fixed names like BPAvatarProfileWidget_1) could reuse a
+-- freed address and match an old identity.
+local TileCachesStale = false
 
 local HooksOk = pcall(function()
     RegisterLoadMapPreHook(function()
         Loading = true
+        TileCachesStale = true
     end)
     RegisterLoadMapPostHook(function()
         Loading = false
@@ -117,7 +124,10 @@ local function WorldIsSettling()
             end
         end
         if Hud ~= LastHud then
-            if LastHud ~= nil then ResumeAt = math.max(ResumeAt, Now + ResumeSeconds) end
+            if LastHud ~= nil then
+                ResumeAt = math.max(ResumeAt, Now + ResumeSeconds)
+                TileCachesStale = true
+            end
             LastHud = Hud
         end
     end
@@ -177,12 +187,31 @@ for _, Skill in ipairs(Skills) do
     }
 end
 local CurrentMode = 1
--- "Rested" filter: when on, only fully rested avatars are shown.
-local RestedOnly = false
-local RestedTooltip = {
-    Header = "Fully rested",
-    Body = "Shows only avatars at full health and full stamina. Auxiliaries are always shown.",
+-- Filters: check boxes on a second row under the sort buttons, all off at
+-- start. Rested: only avatars with full maximum health and stamina. Personal: only
+-- the player's own avatars (no family or public ones).
+local Filters = {
+    {
+        Name = "Rested", Label = "Rested", On = false,
+        Help = {
+            Header = "Fully rested",
+            Body = "Shows only avatars whose maximum health and maximum stamina are full. Current health does not count. Auxiliaries are always shown.",
+        },
+    },
+    {
+        Name = "Personal", Label = "Personal", On = false,
+        Help = {
+            Header = "Personal avatars",
+            Body = "Shows only your personal avatars: family and public avatars are hidden.",
+        },
+    },
 }
+local function FilterOn(Name)
+    for _, Filter in ipairs(Filters) do
+        if Filter.Name == Name then return Filter.On end
+    end
+    return false
+end
 
 local StorageWidgetClass = "/Script/Anvil.AvatarStorageWidget"
 local ProfileWidgetClass = "/Script/Anvil.AvatarProfileWidget"
@@ -323,11 +352,14 @@ local function ReadSkills(Tile)
     return FakeSkills[Identity(Tile)] or ReadSkillsFromTooltip(Tile)
 end
 
--- Full health and full stamina, read from the tooltip's vitality bars
--- (StatBar.MainBar, a ProgressBar from 0 to 1). Returns true, false, or nil
--- when the bars cannot be read.
+-- Rested = maximum health and maximum stamina at their full value, read from
+-- the tooltip's vitality bars. Each StatBar has a MainBar (current value)
+-- and a LimitBar (the maximum, which drops while the avatar is tired or
+-- hurt), both ProgressBars from 0 to 1. Only the limit counts: an avatar
+-- whose current health is low but whose maximum is full is rested.
+-- Returns true, false, or nil when the bars cannot be read.
 local function ReadBarPercent(Bar)
-    local Ok, Percent = pcall(function() return Bar.MainBar.Percent end)
+    local Ok, Percent = pcall(function() return Bar.LimitBar.Percent end)
     if Ok and type(Percent) == "number" then return Percent end
     return nil
 end
@@ -343,6 +375,35 @@ local function ReadRested(Tile)
     local Stamina = ReadBarPercent(Vitality.StaminaBar)
     if Health == nil or Stamina == nil then return nil end
     return Health >= 0.995 and Stamina >= 0.995
+end
+
+-- Who owns a tile's avatar: "Family", "Public" or "Personal", from the
+-- owner icon the game shows on the tile (FamilyOwnerIconTexture or
+-- PublicOwnerIconTexture; any other image, or no icon, is personal).
+-- Nil when it cannot be read. Each icon image is logged once.
+local OwnerIconsSeen = {}
+local function ReadOwner(Tile)
+    local Ok, Owner, Seen = pcall(function()
+        local Icon = Tile.OwnerTypeIcon
+        if not IsSafe(Icon) then return nil end
+        local Visibility = Icon:GetVisibility()
+        if Visibility == 1 or Visibility == 2 then return "Personal", "no icon" end -- Collapsed, Hidden
+        local Image = Icon.Brush.ResourceObject
+        if not Image or not IsSafe(Image) then return "Personal", "empty icon" end
+        local Address = Image:GetAddress()
+        local Family = Tile.FamilyOwnerIconTexture
+        local Public = Tile.PublicOwnerIconTexture
+        local Name = Image:GetFName():ToString()
+        if IsSafe(Family) and Family:GetAddress() == Address then return "Family", Name end
+        if IsSafe(Public) and Public:GetAddress() == Address then return "Public", Name end
+        return "Personal", Name
+    end)
+    if not Ok then return nil end
+    if Owner and not OwnerIconsSeen[Seen] then
+        OwnerIconsSeen[Seen] = true
+        Log("owner icon '%s' read as %s", tostring(Seen), Owner)
+    end
+    return Owner
 end
 
 -- Sum of the six skills, and of their maximums (nil if one is unknown).
@@ -431,7 +492,8 @@ local CheckBoxSize = 14
 local CheckBoxLabelColor = { R = 0.8, G = 0.8, B = 0.8, A = 1.0 }
 
 -- Bars[storage identity] = { BarAddress, Bar = WrapBox, Buttons = { { Button,
---   Mode, WasPressed } }, Check = CheckBox, CheckLabel = TextBlock }. Its
+--   Mode, WasPressed } }, Checks = { { Check = CheckBox, Label = TextBlock,
+--   Filter } } }. Its
 -- widgets live in the storage's tree: only used after finding that very
 -- storage among the live ones, with the bar still in its scroll box.
 local Bars = {}
@@ -485,10 +547,13 @@ local function RefreshButtonColors()
             local Active = Item.Mode == CurrentMode
             Item.Button:SetBackgroundColor(Active and ActiveColor or InactiveColor)
         end
-        if Entry.Check:IsChecked() ~= RestedOnly then Entry.Check:SetIsChecked(RestedOnly) end
-        Entry.CheckLabel:SetColorAndOpacity({
-            SpecifiedColor = RestedOnly and ActiveColor or CheckBoxLabelColor, ColorUseRule = 0,
-        })
+        for _, Item in ipairs(Entry.Checks) do
+            local On = Item.Filter.On
+            if Item.Check:IsChecked() ~= On then Item.Check:SetIsChecked(On) end
+            Item.Label:SetColorAndOpacity({
+                SpecifiedColor = On and ActiveColor or CheckBoxLabelColor, ColorUseRule = 0,
+            })
+        end
     end
 end
 
@@ -528,6 +593,69 @@ local function HasBar(Storage, ScrollBox)
     if not Entry then return false end
     local First = ScrollBox:GetChildAt(0)
     return IsSafe(First) and First:GetAddress() == Entry.BarAddress
+end
+
+-- Copies the look of a game button onto one of ours by writing the brush
+-- fields of its WidgetStyle property, before it is shown. Never call
+-- Button:SetStyle: FButtonStyle (0x390 bytes) passed to a UFunction
+-- overflowed the 512-byte parameter buffer of UE4SS builds older than
+-- October 2026 (fix "Buffer overflow on UFunctions with very large params
+-- struct"), a fail-fast crash that pcall cannot catch.
+local function CopyColor(Color)
+    local C = Color.SpecifiedColor
+    return { SpecifiedColor = { R = C.R, G = C.G, B = C.B, A = C.A }, ColorUseRule = Color.ColorUseRule }
+end
+
+local function CopyButtonStyle(Target, Source)
+    local From = Source.WidgetStyle
+    local To = Target.WidgetStyle
+    for _, Field in ipairs({ "Normal", "Hovered", "Pressed", "Disabled" }) do
+        pcall(function()
+            local A = From[Field]
+            local B = To[Field]
+            local Resource = A.ResourceObject
+            if Resource == nil or IsSafe(Resource) then B.ResourceObject = Resource end
+            B.DrawAs = A.DrawAs
+            B.Tiling = A.Tiling
+            B.ImageSize = { X = A.ImageSize.X, Y = A.ImageSize.Y }
+            B.Margin = { Left = A.Margin.Left, Top = A.Margin.Top, Right = A.Margin.Right, Bottom = A.Margin.Bottom }
+            B.TintColor = CopyColor(A.TintColor)
+        end)
+        pcall(function()
+            local A = From[Field]
+            local B = To[Field]
+            B.Mirroring = A.Mirroring
+            B.ImageType = A.ImageType
+        end)
+        -- UE5's default button draws a rounded white outline: take the
+        -- game's outline too, or none.
+        pcall(function()
+            local A = From[Field].OutlineSettings
+            local B = To[Field].OutlineSettings
+            local R = A.CornerRadii
+            B.CornerRadii = { X = R.X, Y = R.Y, Z = R.Z, W = R.W }
+            B.Color = CopyColor(A.Color)
+            B.Width = A.Width
+            B.RoundingType = A.RoundingType
+            B.bUseBrushTransparency = A.bUseBrushTransparency
+        end)
+    end
+    for _, Field in ipairs({ "NormalForeground", "HoveredForeground", "PressedForeground", "DisabledForeground" }) do
+        pcall(function() To[Field] = CopyColor(From[Field]) end)
+    end
+    -- The default padding (12 px on the sides) pushed long labels out.
+    for _, Field in ipairs({ "NormalPadding", "PressedPadding" }) do
+        pcall(function()
+            local M = From[Field]
+            To[Field] = { Left = M.Left, Top = M.Top, Right = M.Right, Bottom = M.Bottom }
+        end)
+    end
+    for _, Field in ipairs({ "PressedSlateSound", "ClickedSlateSound", "HoveredSlateSound" }) do
+        pcall(function()
+            local Resource = From[Field].ResourceObject
+            if Resource == nil or IsSafe(Resource) then To[Field].ResourceObject = Resource end
+        end)
+    end
 end
 
 -- Adds the button row to a storage widget. StyleTile is one of its tiles,
@@ -571,13 +699,21 @@ local function AddSortBar(Storage, StyleTile)
         Entries[#Entries + 1] = { Mode = Mode, Label = ModeLabels[Name], Help = ModeTooltips[Name] }
     end
 
+    -- The sort buttons have the first row to themselves: share the grid's
+    -- width between them when it is wide enough (6 columns), else keep the
+    -- default width and let them wrap (4 columns).
+    local Width = math.max(ButtonWidth, math.floor((Columns * 66 - 4) / #Entries) - 2)
+
     for _, Entry in ipairs(Entries) do
         local Box = NewWidget("SizeBox", Tree)
-        Box:SetWidthOverride(ButtonWidth)
+        Box:SetWidthOverride(Width)
         Box:SetHeightOverride(ButtonHeight)
 
         local Button = NewWidget("Button", Tree)
-        pcall(function() Button:SetStyle(StyleTile.ProfileButton.WidgetStyle) end)
+        pcall(function()
+            local Source = StyleTile.ProfileButton
+            if IsSafe(Source) then CopyButtonStyle(Button, Source) end
+        end)
         SetTooltip(Button, Entry.Help)
         Box:AddChild(Button)
 
@@ -592,45 +728,50 @@ local function AddSortBar(Storage, StyleTile)
         Buttons[#Buttons + 1] = { Button = Button, Mode = Entry.Mode, WasPressed = false }
     end
 
-    -- The Rested filter: a check box with its label as content, so a click
-    -- on the text toggles it too. It toggles itself; PollButtons notices.
-    local Check = NewWidget("CheckBox", Tree)
-    local Ok, Error = pcall(function()
-        local Unchecked = LoadObject(CheckBoxFolder, CheckBoxTextures.Unchecked)
-        local Checked = LoadObject(CheckBoxFolder, CheckBoxTextures.Checked)
-        if not Unchecked or not Checked then error("textures not found") end
-        local Style = Check.WidgetStyle
-        local function SetBrush(Field, Texture, Brightness)
-            local Brush = Style[Field]
-            Brush.ResourceObject = Texture
-            Brush.ImageSize = { X = CheckBoxSize, Y = CheckBoxSize }
-            Brush.DrawAs = 3 -- Image
-            Brush.TintColor = {
-                SpecifiedColor = { R = Brightness, G = Brightness, B = Brightness, A = 1.0 }, ColorUseRule = 0,
-            }
-        end
-        SetBrush("UncheckedImage", Unchecked, 0.85)
-        SetBrush("UncheckedHoveredImage", Unchecked, 1.0)
-        SetBrush("UncheckedPressedImage", Unchecked, 0.7)
-        SetBrush("CheckedImage", Checked, 0.85)
-        SetBrush("CheckedHoveredImage", Checked, 1.0)
-        SetBrush("CheckedPressedImage", Checked, 0.7)
-    end)
-    if not Ok then Log("game check box textures not used (%s)", tostring(Error)) end
-    SetTooltip(Check, RestedTooltip)
-    local CheckLabel = NewLabel("Rested")
-    local CheckLabelSlot = Check:SetContent(CheckLabel)
-    pcall(function()
-        CheckLabelSlot:SetPadding({ Left = 3, Top = 0, Right = 0, Bottom = 0 })
-        CheckLabelSlot:SetVerticalAlignment(VAlignCenter)
-    end)
-    Check:SetIsChecked(RestedOnly)
-    local CheckBox = NewWidget("SizeBox", Tree)
-    CheckBox:SetHeightOverride(ButtonHeight)
-    CheckBox:AddChild(Check)
-    local CheckSlot = Bar:AddChildToWrapBox(CheckBox)
-    -- A little apart from the sort buttons: it is a setting, not a sort.
-    CheckSlot:SetPadding({ Left = 4, Top = 0, Right = 2, Bottom = 2 })
+    -- The filters: check boxes with their label as content, so a click on
+    -- the text toggles them too. They toggle themselves; PollButtons
+    -- notices. The first one starts a new row.
+    local Checks = {}
+    for Index, Filter in ipairs(Filters) do
+        local Check = NewWidget("CheckBox", Tree)
+        local Ok, Error = pcall(function()
+            local Unchecked = LoadObject(CheckBoxFolder, CheckBoxTextures.Unchecked)
+            local Checked = LoadObject(CheckBoxFolder, CheckBoxTextures.Checked)
+            if not Unchecked or not Checked then error("textures not found") end
+            local Style = Check.WidgetStyle
+            local function SetBrush(Field, Texture, Brightness)
+                local Brush = Style[Field]
+                Brush.ResourceObject = Texture
+                Brush.ImageSize = { X = CheckBoxSize, Y = CheckBoxSize }
+                Brush.DrawAs = 3 -- Image
+                Brush.TintColor = {
+                    SpecifiedColor = { R = Brightness, G = Brightness, B = Brightness, A = 1.0 }, ColorUseRule = 0,
+                }
+            end
+            SetBrush("UncheckedImage", Unchecked, 0.85)
+            SetBrush("UncheckedHoveredImage", Unchecked, 1.0)
+            SetBrush("UncheckedPressedImage", Unchecked, 0.7)
+            SetBrush("CheckedImage", Checked, 0.85)
+            SetBrush("CheckedHoveredImage", Checked, 1.0)
+            SetBrush("CheckedPressedImage", Checked, 0.7)
+        end)
+        if not Ok then Log("game check box textures not used (%s)", tostring(Error)) end
+        SetTooltip(Check, Filter.Help)
+        local CheckLabel = NewLabel(Filter.Label)
+        local CheckLabelSlot = Check:SetContent(CheckLabel)
+        pcall(function()
+            CheckLabelSlot:SetPadding({ Left = 3, Top = 0, Right = 0, Bottom = 0 })
+            CheckLabelSlot:SetVerticalAlignment(VAlignCenter)
+        end)
+        Check:SetIsChecked(Filter.On)
+        local CheckBox = NewWidget("SizeBox", Tree)
+        CheckBox:SetHeightOverride(ButtonHeight - 4)
+        CheckBox:AddChild(Check)
+        local CheckSlot = Bar:AddChildToWrapBox(CheckBox)
+        CheckSlot:SetPadding({ Left = Index == 1 and 2 or 0, Top = 0, Right = 12, Bottom = 2 })
+        if Index == 1 then pcall(function() CheckSlot:SetNewLine(true) end) end
+        Checks[#Checks + 1] = { Check = Check, Label = CheckLabel, Filter = Filter }
+    end
 
     -- The scroll box can only append: take the grid out, add the bar,
     -- then put the grid back under it. The tiles stay in the grid.
@@ -644,7 +785,7 @@ local function AddSortBar(Storage, StyleTile)
     GridSlot:SetVerticalAlignment(VAlignTop)
 
     Bars[Identity(Storage)] = {
-        BarAddress = Bar:GetAddress(), Bar = Bar, Buttons = Buttons, Check = Check, CheckLabel = CheckLabel,
+        BarAddress = Bar:GetAddress(), Bar = Bar, Buttons = Buttons, Checks = Checks,
     }
     RefreshButtonColors()
 end
@@ -715,6 +856,13 @@ end
 -- moves them back.
 local Layouts = {}
 
+local function ClearTileCaches()
+    for _, Cache in ipairs({ GameOrder, LabelAddress, LabelTexts, HiddenTiles }) do
+        for Key in pairs(Cache) do Cache[Key] = nil end
+    end
+    TileCachesStale = false
+end
+
 local function SortStorage(Storage)
     local Entries = {}
     local StyleTile = nil
@@ -731,9 +879,16 @@ local function SortStorage(Storage)
         local LabelOk, LabelError = pcall(UpdateTileLabel, Tile, Values)
         if not LabelOk then Log("tile label failed: %s", tostring(LabelError)) end
         local Auxiliary = IsAuxiliary(Values)
-        -- Only named avatars are filtered: never auxiliaries or empty cells,
-        -- nor an avatar whose bars cannot be read.
-        local Hidden = RestedOnly and Values ~= nil and not Auxiliary and ReadRested(Tile) == false
+        -- Never filter empty cells, nor an avatar whose state cannot be
+        -- read. Rested skips auxiliaries; Personal hides family ones too.
+        local Hidden = false
+        if Values ~= nil then
+            if FilterOn("Rested") and not Auxiliary and ReadRested(Tile) == false then Hidden = true end
+            if not Hidden and FilterOn("Personal") then
+                local Owner = ReadOwner(Tile)
+                if Owner ~= nil and Owner ~= "Personal" then Hidden = true end
+            end
+        end
         SetTileHidden(Tile, Hidden)
         -- A tile the game itself hid (seen 2026-11-05 with avatars being moved
         -- to another place: their tiles vanished but kept their skills) still
@@ -792,6 +947,7 @@ local StallSeconds = 3
 
 local function SortAll()
     if WorldIsSettling() then return end
+    if TileCachesStale then ClearTileCaches() end
     NewPass()
     ForEachStorage(function(Storage)
         local Ok, Error = pcall(SortStorage, Storage)
@@ -988,9 +1144,9 @@ end)
 ------------------------------------------------------------------------
 
 -- Must run on the game thread.
-local function SetRestedOnly(On)
-    RestedOnly = On
-    Log("rested filter: %s", On and "on" or "off")
+local function SetFilter(Filter, On)
+    Filter.On = On
+    Log("%s filter: %s", Filter.Name, On and "on" or "off")
     RefreshButtonColors()
     SortAll()
 end
@@ -1022,10 +1178,12 @@ local function PollButtons()
             end
             Item.WasPressed = Pressed
         end
-        local Checked = Entry.Check:IsChecked()
-        if Checked ~= RestedOnly then
-            SetRestedOnly(Checked)
-            return
+        for _, Item in ipairs(Entry.Checks) do
+            local Checked = Item.Check:IsChecked()
+            if Checked ~= Item.Filter.On then
+                SetFilter(Item.Filter, Checked)
+                return
+            end
         end
     end
 end
@@ -1080,6 +1238,7 @@ local AnyShown = false
 local NextIdleSearch = 0
 local function PollUi()
     if WorldIsSettling() then return end
+    if TileCachesStale then ClearTileCaches() end
     local Now = os.clock()
     if not AnyShown and Now < NextIdleSearch then return end
     NextIdleSearch = Now + 0.5
@@ -1167,7 +1326,7 @@ local function ProbeTile(Tile, Slot)
         end)
         Bars[#Bars + 1] = Ok and Text or (Name .. " unreadable")
     end
-    Log("    %s, rested %s", table.concat(Bars, ", "), tostring(ReadRested(Tile)))
+    Log("    %s, rested %s, owner %s", table.concat(Bars, ", "), tostring(ReadRested(Tile)), tostring(ReadOwner(Tile)))
 end
 
 RegisterDevKey(Key.F8, function()

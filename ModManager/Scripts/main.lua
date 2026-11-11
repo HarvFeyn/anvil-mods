@@ -16,7 +16,7 @@
 local UEHelpers = require("UEHelpers")
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.2.1"
+local Version = "0.2.2"
 
 local function Log(Format, ...)
     print("[ModManager] " .. string.format(Format, ...) .. "\n")
@@ -461,6 +461,56 @@ local function HasButton(Menu)
     return ModsButton ~= nil and ModsButton.MenuId == Identity(Menu)
 end
 
+-- Takes Added pixels back from the menu box once the Mods button is in:
+-- first from the spacers between the buttons (each keeps at least a third
+-- of its height), then from the buttons' own height (each loses at most a
+-- quarter). Returns the pixels it could not take back.
+local function ShrinkMenu(Box, Model, Added)
+    local ButtonClass = ClassName(Model)
+    local Spacers, Buttons, SpacerTotal = {}, {}, 0
+    for Index = 0, Box:GetChildrenCount() - 1 do
+        local Child = Box:GetChildAt(Index)
+        if IsSafe(Child) then
+            local Name = ClassName(Child)
+            if Name == "Spacer" then
+                local Ok, Size = pcall(function() return { X = Child.Size.X, Y = Child.Size.Y } end)
+                if Ok and Size.Y > 0 then
+                    Spacers[#Spacers + 1] = { Widget = Child, Size = Size }
+                    SpacerTotal = SpacerTotal + Size.Y
+                end
+            elseif Name == ButtonClass then
+                local Ok, Height = pcall(function() return Child.SizeBox.HeightOverride end)
+                if Ok and Height and Height > 0 then Buttons[#Buttons + 1] = { Widget = Child, Height = Height } end
+            end
+        end
+    end
+
+    local Left = Added
+    local FromSpacers = math.min(Left, SpacerTotal * 2 / 3)
+    if FromSpacers > 0 then
+        for _, Item in ipairs(Spacers) do
+            local Height = Item.Size.Y - FromSpacers * Item.Size.Y / SpacerTotal
+            Item.Widget:SetSize({ X = Item.Size.X, Y = Height })
+        end
+        Left = Left - FromSpacers
+    end
+
+    local Each = 0
+    if Left > 0 and #Buttons > 0 then
+        Each = Left / #Buttons
+        for _, Item in ipairs(Buttons) do Each = math.min(Each, Item.Height / 4) end
+        for _, Item in ipairs(Buttons) do
+            local Height = Item.Height - Each
+            pcall(function() Item.Widget.ButtonHeight = Height end)
+            Item.Widget.SizeBox:SetHeightOverride(Height)
+        end
+        Left = Left - Each * #Buttons
+    end
+    Log("menu kept its height: %.0f px from %d spacers, %.0f px from each of %d buttons",
+        FromSpacers, #Spacers, Each, #Buttons)
+    return Left
+end
+
 -- Adds a "Mods" button just before Exit, built like the menu's own buttons.
 local function AddModsButton(Menu)
     if HasButton(Menu) then return end
@@ -505,17 +555,25 @@ local function AddModsButton(Menu)
         RestoreSlot(Box:AddChild(Item.Widget), Item.Slot)
     end
 
-    -- The box is anchored by its centre (or some point of it) on the menu's
-    -- canvas: it grew upwards too and pushed Play onto the logo. Move it
-    -- down by the part that grew above, so Play stays where it was.
-    local Ok, Error = pcall(function()
-        local CanvasSlot = Box.Slot
-        local Position = CanvasSlot:GetPosition()
-        local Shift = Added * CanvasSlot:GetAlignment().Y
-        CanvasSlot:SetPosition({ X = Position.X, Y = Position.Y + Shift })
-        Log("menu buttons moved down by %.0f (added height %.0f)", Shift, Added)
-    end)
-    if not Ok then Log("could not move the menu buttons: %s", tostring(Error)) end
+    -- Keep the menu as tall as it was: a taller box pushed Play onto the
+    -- logo, or (moved down) Exit under the Discord link on some screens.
+    local Left = Added
+    local ShrinkOk, ShrinkError = pcall(function() Left = ShrinkMenu(Box, Model, Added) end)
+    if not ShrinkOk then Log("could not shrink the menu: %s", tostring(ShrinkError)) end
+
+    -- Whatever could not be taken back: the box is anchored by its centre
+    -- (or some point of it) on the menu's canvas, so it grew upwards too.
+    -- Move it down by the part that grew above, so Play stays in place.
+    if Left > 0.5 then
+        local Ok, Error = pcall(function()
+            local CanvasSlot = Box.Slot
+            local Position = CanvasSlot:GetPosition()
+            local Shift = Left * CanvasSlot:GetAlignment().Y
+            CanvasSlot:SetPosition({ X = Position.X, Y = Position.Y + Shift })
+            Log("menu buttons moved down by %.0f (%.0f px not taken back)", Shift, Left)
+        end)
+        if not Ok then Log("could not move the menu buttons: %s", tostring(Error)) end
+    end
 
     ModsButton = { MenuId = Identity(Menu), Address = Widget:GetAddress() }
     OnClick(Widget, function() OpenPanel(Menu) end)
@@ -892,7 +950,7 @@ local function AddColourRow(Tree, Model, Mod, Setting, Values)
     Panel.List:AddChildToVerticalBox(Row):SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = 12 })
 end
 
--- The note on restarts, the releases link and Check for updates are about
+-- The note on restarts, the releases link and the GitHub button are about
 -- the mod list: shown there only.
 local function ShowListExtras(Shown)
     for _, Widget in ipairs({ Panel.Note, Panel.Latest, Panel.Releases }) do
@@ -973,14 +1031,14 @@ OpenPanel = function(Menu)
     pcall(function() ScrollSlot:SetSize({ SizeRule = 1, Value = 1 }) end)
 
     -- Bottom: where to find the latest versions, and Back.
-    local Latest = NewText(Tree, Model, 0.7, "Latest versions: " .. ReleasesUrl)
+    local Latest = NewText(Tree, Model, 0.7, "All mods and updates on GitHub: " .. ReleasesUrl)
     SetColor(Latest, OffColor)
     local LatestSlot = Content:AddChildToVerticalBox(Latest)
     LatestSlot:SetHorizontalAlignment(HAlignCenter)
     LatestSlot:SetPadding({ Left = 0, Top = 16, Right = 0, Bottom = 0 })
 
     local Buttons = NewWidget("HorizontalBox", Tree)
-    local Releases = NewMenuButton(Model, "Check for updates")
+    local Releases = NewMenuButton(Model, "Open GitHub page")
     pcall(function() Releases.ButtonText:SetFont(ScaledFont(Model, 0.85)) end)
     Buttons:AddChildToHorizontalBox(Releases):SetPadding({ Left = 0, Top = 0, Right = 24, Bottom = 0 })
     local Back = NewMenuButton(Model, "Back")

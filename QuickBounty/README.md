@@ -1,12 +1,12 @@
 # QuickBounty
 
-Removes the pause after handing in a bounty on the **Anvil Empires**
-bounty board.
+Puts the bounties you can hand in at the top of the **Anvil Empires**
+bounty board, and removes the pause after handing one in.
 
 **[Download QuickBounty.zip](../../../releases/latest/download/QuickBounty.zip)**
 · [How to install](../README.md#installation)
 
-Version 0.1.2, tested with the Anvil Empires playtest of November 2026 and
+Version 0.2.0, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
 ## What it does
@@ -23,6 +23,13 @@ The **withdraw** button shows the final amount at once instead of counting
 up, and it is ready as soon as the server has answered: the game kept it
 greyed for about two more seconds (closing and opening the window already
 skipped that wait).
+
+**Ready bounties first**: the bounties you can hand in right now, with what
+you carry, get a gold frame and move to the top of the list. The mod
+compares the item each bounty asks for with the items in your inventory.
+When the board opens, the list is hidden for about a tenth of a second
+while the mod reads every bounty, then shown again, sorted. After a
+hand-in, the bounties you can no longer hand in lose their frame at once.
 
 ## What it does not do
 

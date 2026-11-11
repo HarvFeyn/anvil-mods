@@ -6,7 +6,7 @@ skill on its tile.
 **[Download AvatarSort.zip](../../../releases/latest/download/AvatarSort.zip)**
 · [How to install](../README.md#installation)
 
-Version 0.2.5, tested with the Anvil Empires playtest of November 2026 and
+Version 0.3.0, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
 ## What it does
@@ -24,8 +24,15 @@ area marker, caravan, inventory, deployment pop-up):
 | **Logging** | Logging & Mining |
 | **Hunting** | Hunting |
 
-After the buttons, the **Rested** check box: when it is ticked, only
-avatars at full health and full stamina are shown. Auxiliaries are always shown.
+Under the buttons, two filters, both off until you tick them:
+
+- **Rested**: only avatars whose maximum health and maximum stamina are
+  full are shown (an avatar that is only missing current health still
+  counts as rested). Auxiliaries are always shown.
+- **Personal**: only your personal avatars are shown; family and public
+  avatars are hidden.
+
+Ticked together, they show your personal avatars that are fully rested.
 
 - Highest first. When two avatars have the same value, the one with the
   higher maximum comes first.

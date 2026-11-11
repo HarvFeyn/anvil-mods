@@ -1,3 +1,3 @@
 name = QuickBounty
-version = 0.1.2
-description = Removes the pause after handing in a bounty or taking the silver on the bounty board.
+version = 0.2.0
+description = Puts the bounties you can hand in at the top in a gold frame, and removes the pause after handing in a bounty or taking the silver.
