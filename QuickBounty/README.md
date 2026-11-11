@@ -5,6 +5,7 @@ bounty board, and removes the pause after handing one in.
 
 **[Download QuickBounty.zip](../../../releases/latest/download/QuickBounty.zip)**
 · [How to install](../README.md#installation)
+· Author: [Feyn](https://github.com/HarvFeyn)
 
 Version 0.2.0, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
