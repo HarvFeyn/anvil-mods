@@ -7,10 +7,10 @@ name, and adds an online-only filter button.
 · [How to install](../README.md#installation)
 · Author: [@gabrdeux](https://github.com/gabrdeux)
 
-Version 0.1.0, tested with the Anvil Empires playtest of November 2026 and
+Version 0.2.0, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
-![HouseScreenSorter preview](preview.jpg)
+![HouseScreenSorter preview](../docs/HouseScreenSorter/preview.jpg)
 
 ## What it does
 
