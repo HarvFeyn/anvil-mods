@@ -30,7 +30,7 @@
 --]]
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.2.0"
+local Version = "0.2.1"
 
 local function Log(Format, ...)
     print("[QuickBounty] " .. string.format(Format, ...) .. "\n")
@@ -571,7 +571,9 @@ local function RequestOf(Entry)
     if not IsSafe(Resource) then return nil end
     local Icon = TextureName(Resource.ResourceIcon)
     if not Icon then return nil end
-    return { Icon = Icon, Count = CountOf(ReadText(Resource.ResourceCostText)) }
+    -- The reward, for the developer check near the daily cap.
+    local Silver = tonumber(string.match(ReadText(Entry.BountySilverText), "%d+") or "")
+    return { Icon = Icon, Count = CountOf(ReadText(Resource.ResourceCostText)), Silver = Silver }
 end
 
 local InventorySource = "none"
@@ -729,6 +731,14 @@ local function ItemOf(Entry)
     return nil
 end
 
+-- Bounties the game marks unavailable (UBountyListViewItem.bIsUnavailable,
+-- new in the patch of 2026-11-19, shown with an UnavailableBorder) are
+-- never ready, whatever the player carries. Older builds have no flag.
+local function IsUnavailable(Item)
+    local Ok, Flag = pcall(function() return Item.bIsUnavailable end)
+    return Ok and Flag == true
+end
+
 local function IsReady(Request, Items)
     return Request ~= nil and Items ~= nil and (Items[Request.Icon] or 0) >= Request.Count
 end
@@ -760,7 +770,7 @@ local function SortBounties(Window, Items)
     for Index = 1, #GameItems do
         local Item = GameItems[Index]
         if not IsSafe(Item) then return end
-        if IsReady(Requests[Item.BountyId], Items) then Ready[#Ready + 1] = Item else Others[#Others + 1] = Item end
+        if IsReady(Requests[Item.BountyId], Items) and not IsUnavailable(Item) then Ready[#Ready + 1] = Item else Others[#Others + 1] = Item end
     end
     for _, Item in ipairs(Others) do Ready[#Ready + 1] = Item end
     local Wanted = Ready
@@ -898,7 +908,8 @@ local function UpdateEntries(Window, Items, Learning)
                 Frame = EnsureFrame(Entry)
             end
             if Frame then
-                local Wanted = (not Learning and IsReady(Request, Items)) and SlateHitTestInvisible or SlateCollapsed
+                local Ready = not Learning and IsReady(Request, Items) and not (Item and IsUnavailable(Item))
+                local Wanted = Ready and SlateHitTestInvisible or SlateCollapsed
                 if Frame:GetVisibility() ~= Wanted then Frame:SetVisibility(Wanted) end
             end
         end)
@@ -907,10 +918,132 @@ local function UpdateEntries(Window, Items, Learning)
     return New
 end
 
+
+------------------------------------------------------------------------
+-- Daily silver on the progress bar. Since the patch of 2026-11-19 the
+-- silver earned from bounties per day is capped (3000, per the patch
+-- notes), and BountyProgressBar shows the share earned (0.167 = 500). The
+-- time the cycle restarts is not readable on the client
+-- (FBountyPlayerState is server data; DebugBountyRefreshTime is 0). The
+-- mod writes "500 / 3000 silver today" above the bar. SilverLabel = the
+-- plate's address, found again in the overlay holding the bar.
+------------------------------------------------------------------------
+
+local DailySilverCap = 3000
+local SilverLabel = nil
+local SilverLabelLogged = false
+local SilverPlateHeight = 0 -- plate height the padding was set for
+local SilverPlateGap = 3 -- pixels between the plate and the bar
+
+local function FindLabel(Overlay)
+    if not SilverLabel or not IsSafe(Overlay) then return nil end
+    for Index = 0, Overlay:GetChildrenCount() - 1 do
+        local Child = Overlay:GetChildAt(Index)
+        if IsSafe(Child) and Child:GetAddress() == SilverLabel then return Child end
+    end
+    return nil
+end
+
+local function NewSilverLabel(Window)
+    local Label = StaticConstructObject(StaticFindObject("/Script/UMG.TextBlock"), Window.WidgetTree)
+    pcall(function()
+        local Font = Window.SubmitBountyHintText.Font
+        Label:SetFont({
+            FontObject = Font.FontObject,
+            FontMaterial = Font.FontMaterial,
+            TypefaceFontName = Font.TypefaceFontName,
+            Size = math.max(8, math.floor(Font.Size * 0.8 + 0.5)),
+            LetterSpacing = Font.LetterSpacing,
+        })
+    end)
+    pcall(function()
+        Label:SetColorAndOpacity({ SpecifiedColor = { R = 1, G = 1, B = 1, A = 1 }, ColorUseRule = 0 })
+        Label:SetShadowOffset({ X = 1, Y = 1 })
+        Label:SetShadowColorAndOpacity({ R = 0, G = 0, B = 0, A = 0.9 })
+    end)
+    Label:SetVisibility(SlateHitTestInvisible)
+    return Label
+end
+
+-- The overlay holding the bar: its parent if it is one, else one the mod
+-- puts in the bar's place (only in a single-child parent, a SizeBox or a
+-- Border). Nil when the layout is something else.
+local function BarOverlay(Bar)
+    local Parent = Bar:GetParent()
+    if not IsSafe(Parent) then return nil end
+    local Kind = ClassName(Parent)
+    if Kind == "Overlay" then return Parent end
+    if Kind == "SizeBox" or Kind == "Border" then
+        local Overlay = StaticConstructObject(StaticFindObject("/Script/UMG.Overlay"), Parent:GetOuter())
+        local Slot = Overlay:AddChildToOverlay(Bar) -- takes it out of the parent
+        Slot:SetHorizontalAlignment(0)
+        Slot:SetVerticalAlignment(0)
+        Parent:SetContent(Overlay)
+        return Overlay
+    end
+    if not SilverLabelLogged then
+        SilverLabelLogged = true
+        Log("no silver text: the bounty progress bar sits in a %s", Kind)
+    end
+    return nil
+end
+
+local function UpdateSilverLabel(Window)
+    local Bar = Window.BountyProgressBar
+    if not IsSafe(Bar) or not IsShown(Bar) then return end
+    local Earned = math.floor(Bar.Percent * DailySilverCap + 0.5)
+    local Text = string.format("%d / %d silver today", Earned, DailySilverCap)
+    -- The text sits on a small dark rounded plate just above the bar's
+    -- middle (white text on the gold fill was hard to read, and a plate
+    -- inside the bar hid too much of it). The plate stays in the bar's
+    -- overlay, pushed up by a negative top padding of its own height.
+    local Overlay = Bar:GetParent()
+    local Plate = (IsSafe(Overlay) and ClassName(Overlay) == "Overlay") and FindLabel(Overlay) or nil
+    local Label = nil
+    if Plate then
+        Label = Plate:GetContent()
+    else
+        Overlay = BarOverlay(Bar)
+        if not Overlay then return end
+        Plate = StaticConstructObject(StaticFindObject("/Script/UMG.Border"), Window.WidgetTree)
+        pcall(function()
+            local Brush = Plate.Background
+            Brush.DrawAs = 4 -- RoundedBox
+            Brush.TintColor = { SpecifiedColor = { R = 0.04, G = 0.04, B = 0.04, A = 0.8 }, ColorUseRule = 0 }
+            Brush.OutlineSettings.CornerRadii = { X = 3, Y = 3, Z = 3, W = 3 }
+            Brush.OutlineSettings.Width = 0
+            Brush.OutlineSettings.RoundingType = 0 -- FixedRadius
+        end)
+        pcall(function() Plate:SetPadding({ Left = 8, Top = 1, Right = 8, Bottom = 1 }) end)
+        pcall(function() Plate:SetVerticalAlignment(2) end) -- text centred in the plate
+        Plate:SetVisibility(SlateHitTestInvisible)
+        Plate:SetRenderOpacity(0.0) -- until its height is known (next layout)
+        Label = NewSilverLabel(Window)
+        Plate:SetContent(Label)
+        local Slot = Overlay:AddChildToOverlay(Plate)
+        Slot:SetHorizontalAlignment(2) -- Center
+        Slot:SetVerticalAlignment(1) -- Top
+        SilverLabel = Plate:GetAddress()
+        SilverPlateHeight = 0
+    end
+    if not IsSafe(Label) then return end
+    if ReadText(Label) ~= Text then Label:SetText(FText(Text)) end
+    -- Lift the plate above the bar once its height is known.
+    local Height = 0
+    pcall(function() Height = math.floor(Plate:GetDesiredSize().Y + 0.5) end)
+    if Height > 0 and Height ~= SilverPlateHeight then
+        SilverPlateHeight = Height
+        Plate.Slot:SetPadding({ Left = 0, Top = -(Height + SilverPlateGap), Right = 0, Bottom = 0 })
+        Plate:SetRenderOpacity(1.0)
+    end
+end
+
 local function UpdateBoard(Window)
     local Items = PlayerItems()
     UpdateEntries(Window, Items)
     SortBounties(Window, Items)
+    local LabelOk, LabelError = pcall(UpdateSilverLabel, Window)
+    if not LabelOk then Log("silver text error: %s", tostring(LabelError)) end
 end
 
 -- Developer check (Ctrl+F7): every copy of the player inventory, whether
@@ -969,6 +1102,29 @@ RegisterDevKey(Key.F7, function()
             end
             table.sort(Ready)
             Log("check: ready bounties: %s", #Ready > 0 and table.concat(Ready, ", ") or "none")
+            local Unavailable = {}
+            local Window = FindWindow()
+            if Window then
+                local GameItems = Window.BountyListViewItems
+                for Index = 1, #GameItems do
+                    local Item = GameItems[Index]
+                    if IsSafe(Item) then
+                        local Refresh = "?"
+                        pcall(function() Refresh = tostring(Item.DebugBountyRefreshTime) end)
+                        local Request = Requests[Item.BountyId]
+                        Unavailable[#Unavailable + 1] = string.format("#%d%s reward %s refresh %s", Item.BountyId,
+                            IsUnavailable(Item) and " UNAVAILABLE" or "", Request and tostring(Request.Silver) or "?", Refresh)
+                    end
+                end
+            end
+            Log("check: bounties (unavailable flag, DebugBountyRefreshTime): %s", table.concat(Unavailable, ", "))
+            pcall(function()
+                local Bar = Window.BountyProgressBar
+                local Tip = "none"
+                pcall(function() Tip = Bar.ToolTipText:ToString() end)
+                Log("check: daily silver bar %.3f (%s), tooltip '%s', hint '%s'", Bar.Percent, Looks(Bar), Tip,
+                    ReadText(Window.SubmitBountyHintText))
+            end)
         end)
         if not Ok then Log("check error: %s", tostring(Error)) end
     end)
@@ -1095,6 +1251,8 @@ local function PollWindow()
     if WorldIsSettling() then
         -- New windows after a change of area: forget the old entries.
         if next(Frames) ~= nil then Frames = {} end
+        SilverLabel = nil
+        SilverPlateHeight = 0
         if #Ledger > 0 then Ledger = {} end
         if next(CopyState) ~= nil then CopyState = {} end
         CopiesSeen = false

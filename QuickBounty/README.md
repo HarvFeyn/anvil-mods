@@ -7,7 +7,7 @@ bounty board, and removes the pause after handing one in.
 · [How to install](../README.md#installation)
 · Author: [Feyn](https://github.com/HarvFeyn)
 
-Version 0.2.0, tested with the Anvil Empires playtest of November 2026 and
+Version 0.2.1, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
 ## What it does
@@ -28,9 +28,17 @@ skipped that wait).
 **Ready bounties first**: the bounties you can hand in right now, with what
 you carry, get a gold frame and move to the top of the list. The mod
 compares the item each bounty asks for with the items in your inventory.
+Bounties the game shows as unavailable are never framed.
+
 When the board opens, the list is hidden for about a tenth of a second
 while the mod reads every bounty, then shown again, sorted. After a
 hand-in, the bounties you can no longer hand in lose their frame at once.
+
+**Daily silver**: since November 2026 the silver you can earn from bounties
+is capped at 3000 a day. The bar at the top of the board shows how much
+you have earned; QuickBounty writes the amount on it, for example
+`500 / 3000 silver today`. The game does not tell the client when the
+count restarts, so the mod cannot show that.
 
 ## What it does not do
 
