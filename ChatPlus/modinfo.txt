@@ -1,0 +1,3 @@
+name = ChatPlus
+version = 0.1.0
+description = Small improvements to the in-game chat: the time of each message, and the channel you picked stays picked.
