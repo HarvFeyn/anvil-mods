@@ -1,0 +1,3 @@
+name = KeybindPlus
+version = 0.1.0
+description = Adds missing shortcuts to the game's Keybinds menu: the item slots 1 to 8, so AZERTY keyboards can bind them.

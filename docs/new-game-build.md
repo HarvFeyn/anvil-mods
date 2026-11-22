@@ -50,6 +50,7 @@ and its errors in its own lines (`[QuickBounty] … error`).
 | CursorColor | With a colour set: cursor in the menu, in game, in combat (sword), with a hammer; aim with a bow | Cursors in the colour (since the start of the game); aim line in the colour, orange past an obstacle; log has no `cannot` line |
 | NameColors | Look at players of each faction and of your house | Names in the chosen colours; no `left alone` line in the log |
 | QuickBounty | Open a bounty board, hand in one bounty, withdraw the silver; open bounties from the shortcut away from a board | Ready bounties first and framed; no pause after the hand-in; amount beside the withdraw button jumps to the right value (no counting); `N / cap silver today` above the bar, not over the hint text; log has `daily silver cap measured` |
+| KeybindPlus | Options → Keybinds: scroll down, bind Item Slot 1 to a key, use it in game | Item Slot 1 to 8 at the end of the list, showing their keys; the new key works; log has `8 key entries added` |
 | HouseScreenSorter | Open the house (family) screen | Members sorted by role then name; online filter button works (maintained by @gabrdeux) |
 
 Rows of `game-dependencies.md` with no class (`-`) are files or engine

@@ -20,6 +20,7 @@ Small client-side mods for **Anvil Empires**, made with
 | [AvatarSort](AvatarSort/README.md) | Sorts avatar lists by level or by skill, and shows each avatar's value/max on its tile | [Feyn](https://github.com/HarvFeyn) | [AvatarSort.zip](../../releases/latest/download/AvatarSort.zip) |
 | [ChatPlus](ChatPlus/README.md) | Shows the time of each chat message, in your own time zone, and keeps the chat channel you picked | [Feyn](https://github.com/HarvFeyn) | [ChatPlus.zip](../../releases/latest/download/ChatPlus.zip) |
 | [CursorColor](CursorColor/README.md) | Colours the mouse cursor and the bow's aim line, in the colour you choose | [Feyn](https://github.com/HarvFeyn) | [CursorColor.zip](../../releases/latest/download/CursorColor.zip) |
+| [KeybindPlus](KeybindPlus/README.md) | Adds the item slots (1 to 8) to the game's Keybinds menu, so you can change their keys (for AZERTY keyboards) | [Feyn](https://github.com/HarvFeyn) | [KeybindPlus.zip](../../releases/latest/download/KeybindPlus.zip) |
 | [HouseScreenSorter](HouseScreenSorter/README.md) | Sorts family house members by role and alphabetically, with an online-only filter button | [@gabrdeux](https://github.com/gabrdeux) | [HouseScreenSorter.zip](../../releases/latest/download/HouseScreenSorter.zip) |
 | [ModManager](ModManager/README.md) | Adds a Mods button to the main menu to turn these mods on or off, see their versions and change their settings | [Feyn](https://github.com/HarvFeyn) | [ModManager.zip](../../releases/latest/download/ModManager.zip) |
 | [NameColors](NameColors/README.md) | Lets you choose the colours of player names: each faction and your guild | [Feyn](https://github.com/HarvFeyn) | [NameColors.zip](../../releases/latest/download/NameColors.zip) |
@@ -49,6 +50,7 @@ All releases and their changes: [Releases](../../releases).
            ├── ChatPlus\
            ├── CursorColor\
            ├── HouseScreenSorter\
+           ├── KeybindPlus\
            ├── ModManager\
            ├── NameColors\
            ├── QuickBounty\
