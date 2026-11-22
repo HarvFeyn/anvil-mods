@@ -7,7 +7,7 @@ main menu.
 · [How to install](../README.md#installation)
 · Author: [Feyn](https://github.com/HarvFeyn)
 
-Version 0.2.2, tested with the Anvil Empires playtest of November 2026 and
+Version 0.2.3, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
 ## What it does

@@ -16,7 +16,7 @@
 local UEHelpers = require("UEHelpers")
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.2.2"
+local Version = "0.2.3"
 
 local function Log(Format, ...)
     print("[ModManager] " .. string.format(Format, ...) .. "\n")
@@ -162,7 +162,11 @@ end
 
 -- Our mods carry a modinfo.txt ("key = value" lines: name, version,
 -- description, and any number of "setting = Key | Label | colour | r,g,b"
--- lines: settings this panel can change, with their default). Mods without one (UE4SS's own, other authors') are not
+-- lines: settings this panel can change, with their default; and
+-- "offremove = Content/Paks/<name>.pak" lines: a pak the mod writes into
+-- the game's folder, removed when the mod is turned off; "settingsnote" (a
+-- line under the settings title) and "settingspreview" (sample text, or
+-- none)). Mods without one (UE4SS's own, other authors') are not
 -- listed: this manager only handles the mods of this repository.
 local function ReadModInfo(Directory)
     for _, File in pairs(Directory.__files or {}) do
@@ -177,6 +181,12 @@ local function ReadModInfo(Directory)
                     if Name then
                         Info.settings = Info.settings or {}
                         Info.settings[#Info.settings + 1] = { Key = Name, Label = Label, Kind = Kind, Default = Default }
+                    end
+                elseif Key and string.lower(Key) == "offremove" then
+                    -- Only a pak of our own in Content\Paks, nothing else.
+                    if string.match(Value, "^Content/Paks/[%w_%-]+%.pak$") then
+                        Info.offremove = Info.offremove or {}
+                        Info.offremove[#Info.offremove + 1] = Value
                     end
                 elseif Key then
                     Info[string.lower(Key)] = Value
@@ -207,6 +217,9 @@ local function ListMods()
                 Version = Info.version or "?",
                 Description = Info.description or "",
                 Settings = Info.settings,
+                OffRemove = Info.offremove,
+                SettingsPreview = Info.settingspreview,
+                SettingsNote = Info.settingsnote,
                 EnabledTxt = HasFile(Directory, "enabled.txt"),
                 ModsTxt = ModsTxt[Name],
                 Enabled = HasFile(Directory, "enabled.txt") or ModsTxt[Name] == true,
@@ -266,6 +279,32 @@ end
 -- Turns a mod on or off for the next start: its enabled.txt, and its
 -- mods.txt line when it has one, whichever file UE4SS reads first.
 -- Returns true when done.
+
+-- A mod turned off leaves no file of its own in the game's folder: its
+-- offremove paks are removed (the game keeps its paks open but allows it;
+-- if removing fails, the pak is renamed to .old, which the game does not
+-- load). The change shows at the next start, like the mod itself.
+local function RemoveModFiles(Mod)
+    if not Mod.OffRemove then return end
+    -- <game>\Anvil\Binaries\Win64\ue4ss\Mods\<mod> -> <game>\Anvil\
+    local GameFolder = string.match(Mod.Path, "^(.*[\\/])Binaries[\\/]Win64[\\/]ue4ss[\\/]Mods[\\/][^\\/]+[\\/]?$")
+    if not GameFolder then return end
+    for _, Relative in ipairs(Mod.OffRemove) do
+        local Path = GameFolder .. string.gsub(Relative, "/", "\\")
+        local Handle = io.open(Path, "rb")
+        if Handle then
+            Handle:close()
+            if os.remove(Path) then
+                Log("removed %s", Path)
+            elseif os.rename(Path, Path .. ".old") then
+                Log("renamed %s to .old", Path)
+            else
+                Log("could not remove %s", Path)
+            end
+        end
+    end
+end
+
 local function SetModEnabled(Mod, On)
     local EnabledTxt = Mod.Path .. "\\enabled.txt"
     local Ok = true
@@ -281,6 +320,7 @@ local function SetModEnabled(Mod, On)
     end
     if Ok and Mod.ModsTxt ~= nil then Ok = SetModsTxtLine(Mod, On) end
     if not Ok then Log("could not change %s (files not writable?)", Mod.Name) end
+    if Ok and not On then RemoveModFiles(Mod) end
     return Ok
 end
 
@@ -882,22 +922,36 @@ local ShowModList
 local function AddColourRow(Tree, Model, Mod, Setting, Values)
     local Row = NewWidget("HorizontalBox", Tree)
     local Label = NewText(Tree, Model, 0.9, Setting.Label)
-    Row:AddChildToHorizontalBox(Fixed(Tree, Label, LabelWidth)):SetVerticalAlignment(VAlignCenter)
+    -- A label longer than the label column (about 16 characters) goes on
+    -- its own line above the palette instead of running into it.
+    local LabelAbove = #Setting.Label > 16
+    if LabelAbove then
+        Panel.List:AddChildToVerticalBox(Label):SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = 8 })
+    else
+        Row:AddChildToHorizontalBox(Fixed(Tree, Label, LabelWidth)):SetVerticalAlignment(VAlignCenter)
+    end
 
-    local Preview = NewText(Tree, Model, 0.9, "Player Name")
+    -- A sample text in the chosen colour; "settingspreview = none" in a
+    -- mod's modinfo.txt leaves it out, other text replaces "Player Name".
+    local Preview = nil
+    if Mod.SettingsPreview ~= "none" then
+        Preview = NewText(Tree, Model, 0.9, Mod.SettingsPreview or "Player Name")
+    end
     -- Outlines[i] = { Outline, Text }: the swatch borders, to mark the colour
     -- in use. The game's colour has its own swatch, next to Default
     -- (Text "default"): it is the one marked while no colour is chosen.
     local Outlines = {}
     local function ShowPreview()
-        SetColor(Preview, ParseColour(Values[Setting.Key]) or ParseColour(Setting.Default) or OffColor)
+        if Preview then SetColor(Preview, ParseColour(Values[Setting.Key]) or ParseColour(Setting.Default) or OffColor) end
         local Chosen = ParseColour(Values[Setting.Key])
         local Current = Chosen and ColourText(Chosen) or "default"
         for _, Item in ipairs(Outlines) do
             pcall(function() Item.Outline:SetBrushColor(Item.Text == Current and OutlineOn or OutlineOff) end)
         end
     end
-    Row:AddChildToHorizontalBox(Fixed(Tree, Preview, PreviewWidth)):SetVerticalAlignment(VAlignCenter)
+    if Preview then
+        Row:AddChildToHorizontalBox(Fixed(Tree, Preview, PreviewWidth)):SetVerticalAlignment(VAlignCenter)
+    end
 
     -- The palette on rows of PaletteColumns swatches.
     local Swatches = NewWidget("VerticalBox", Tree)
@@ -965,7 +1019,12 @@ ShowSettings = function(Tree, Model, Mod)
     ShowListExtras(false)
 
     local Title = NewText(Tree, Model, 1.0, Mod.Name .. " settings")
-    Panel.List:AddChildToVerticalBox(Title):SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = 20 })
+    Panel.List:AddChildToVerticalBox(Title):SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = Mod.SettingsNote and 6 or 20 })
+    -- "settingsnote = ..." in modinfo.txt: a line under the title.
+    if Mod.SettingsNote then
+        local Note = NewText(Tree, Model, 0.75, Mod.SettingsNote)
+        Panel.List:AddChildToVerticalBox(Note):SetPadding({ Left = 0, Top = 0, Right = 0, Bottom = 20 })
+    end
 
     local Values = ReadSettings(Mod)
     for _, Setting in ipairs(Mod.Settings) do
