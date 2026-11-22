@@ -1,0 +1,68 @@
+name: Bug report
+description: A mod does not work as described, or the game misbehaves with it.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report it! The more precise, the faster it gets fixed.
+        Before writing, check the [open issues](https://github.com/HarvFeyn/anvil-mods/issues) in case it is already known.
+  - type: dropdown
+    id: mod
+    attributes:
+      label: Which mod?
+      options:
+        - AvatarSort
+        - ChatPlus
+        - CursorColor
+        - HouseScreenSorter
+        - KeybindPlus
+        - ModManager
+        - NameColors
+        - QuickBounty
+        - Installation / the pack
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Mod version
+      description: Shown under the mod's name in the game's main menu → Mods.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what you saw instead.
+      placeholder: |
+        I opened a bounty board, handed in a bounty, and ...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen again
+      description: The steps, if you know them. "It happens every time I enter a cave" helps a lot.
+  - type: textarea
+    id: log
+    attributes:
+      label: Log lines
+      description: |
+        Open `ue4ss\UE4SS.log` (in the game's `Anvil\Binaries\Win64` folder) and copy the lines
+        that start with the mod's name, for example `[QuickBounty]`. **Hide other players' names**
+        if the lines show some.
+      render: text
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: Drag an image here if it shows the problem (hide other players' names).
+  - type: input
+    id: game
+    attributes:
+      label: Game version
+      description: Bottom left of the main menu (for example `0.1.234.1 93920`), and whether you play on the live or a test branch.

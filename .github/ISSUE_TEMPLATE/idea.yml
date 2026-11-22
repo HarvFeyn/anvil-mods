@@ -1,0 +1,40 @@
+name: Idea or feedback
+description: An idea for a new mod, an improvement to a mod, or any feedback.
+title: "[Idea] "
+labels: ["idea"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        These mods are quality of life mods: they only change the interface and what your own
+        screen shows, never what the game sends to the server, and they give no advantage in a fight.
+        Ideas in that spirit are welcome!
+  - type: dropdown
+    id: mod
+    attributes:
+      label: About
+      options:
+        - A new mod
+        - AvatarSort
+        - ChatPlus
+        - CursorColor
+        - HouseScreenSorter
+        - KeybindPlus
+        - ModManager
+        - NameColors
+        - QuickBounty
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: What would you like, and what would it make easier in the game?
+    validations:
+      required: true
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Screenshot
+      description: Drag an image here if it helps to show the window or the situation.

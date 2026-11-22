@@ -146,11 +146,27 @@ In `settings.txt` in each mod's folder, written by the **Mods** menu.
 Delete it to go back to the defaults.
 
 **I found a bug, or I have an idea.**
-[Open an issue](../../issues) (a free GitHub account is needed). For a
-bug, say which mod and version (shown in the **Mods** menu), what you did
-and what happened, and add the mod's lines from `ue4ss\UE4SS.log` (the
-lines that start with the mod's name). Hide player names if the lines
-show some.
+See [Report a bug or suggest an idea](#report-a-bug-or-suggest-an-idea)
+below.
+
+## Report a bug or suggest an idea
+
+Bugs and ideas are tracked in this page's **Issues**. You need a GitHub
+account (free).
+
+1. Check the [open issues](../../issues): your bug may already be known.
+   Known problems are labelled `known issue`.
+2. Click **New issue**, then pick **Bug report** or **Idea or feedback**.
+3. Fill in the form. For a bug, it asks:
+   - which mod, and its version (shown in the main menu → **Mods**);
+   - what you did and what happened;
+   - the mod's lines from `ue4ss\UE4SS.log`, in the game's
+     `Anvil\Binaries\Win64` folder: the lines that start with the mod's
+     name, for example `[QuickBounty]`;
+   - a screenshot if it helps (drag the image into the form).
+
+   Hide other players' names in the log lines and screenshots.
+4. Click **Create**. You get an email when someone answers.
 
 ## License
 
