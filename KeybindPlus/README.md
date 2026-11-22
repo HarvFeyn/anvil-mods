@@ -9,6 +9,10 @@ More shortcuts in the key settings of **Anvil Empires**.
 Version 0.1.0, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
+An **accessibility** mod: it makes the game easier to play for players
+whose keyboard is not QWERTY (French AZERTY, for example), by letting them
+choose keys for shortcuts the game does not let them change.
+
 ## What it does
 
 The game's **Keybinds** menu (Options → Keybinds) does not list every

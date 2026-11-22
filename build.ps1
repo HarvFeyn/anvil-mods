@@ -24,7 +24,9 @@ foreach ($Mod in $Mods) {
     # writes backslashes, which some unzip tools reject.
     $Zip = [System.IO.Compression.ZipFile]::Open($ZipPath, 'Create')
     try {
-        foreach ($File in Get-ChildItem -Recurse -File $Mod.FullName) {
+        # A player's own files (settings, what a mod worked out) never go in a
+        # release: an update extracted over an install must not replace them.
+        foreach ($File in Get-ChildItem -Recurse -File $Mod.FullName | Where-Object { @('settings.txt', 'pak.txt', 'dailycap.txt') -notcontains $_.Name }) {
             $Relative = $File.FullName.Substring($Mod.Parent.FullName.Length + 1) -replace '\\', '/'
             [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($Zip, $File.FullName, $Relative) | Out-Null
         }

@@ -47,5 +47,8 @@ manager never changes them.
 ## What it does not do
 
 It only reads and writes files in `ue4ss\Mods\`: the mod's `enabled.txt`,
-and its line in `mods.txt` when it has one. It does not connect to the
-internet, and nothing is sent to the game's server.
+its line in `mods.txt` when it has one, and its `settings.txt`. The one
+exception: when you turn CursorColor off, it also removes the cursor file
+CursorColor wrote (`Anvil\Content\Paks\zCursorColor_P.pak`). It does not
+connect to the internet (**Open GitHub page** only opens your browser),
+and nothing is sent to the game's server.

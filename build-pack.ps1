@@ -53,7 +53,9 @@ try {
             throw "$($Mod.Name) has no enabled.txt: players would get a mod that never starts"
         }
         & (Join-Path $PSScriptRoot 'check-modinfo.ps1') $Mod.FullName
-        foreach ($File in Get-ChildItem -Recurse -File $Mod.FullName) {
+        # A player's own files (settings, what a mod worked out) never go in a
+        # release: an update extracted over an install must not replace them.
+        foreach ($File in Get-ChildItem -Recurse -File $Mod.FullName | Where-Object { @('settings.txt', 'pak.txt', 'dailycap.txt') -notcontains $_.Name }) {
             $Relative = $File.FullName.Substring($Mod.Parent.FullName.Length + 1).Replace('\', '/')
             [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($Pack, $File.FullName, "ue4ss/Mods/$Relative") | Out-Null
         }
