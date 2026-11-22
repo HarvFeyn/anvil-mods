@@ -1,0 +1,7 @@
+name = CursorColor
+version = 0.1.0
+description = Colours the mouse cursor and the bow's aim line. A new colour shows at the next start of the game.
+setting = Colour | Cursor and aim line color | colour | 1.00,1.00,1.00
+settingspreview = none
+settingsnote = The new cursor color shows the next time you start the game (the aim line changes at once).
+offremove = Content/Paks/zCursorColor_P.pak
