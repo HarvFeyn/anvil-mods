@@ -10,6 +10,8 @@ bounty board, and removes the pause after handing one in.
 Version 0.2.2, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
+![A ready bounty framed first, and the daily silver above the bar](../docs/QuickBounty/bounty-board.png)
+
 ## What it does
 
 After you hand in a bounty, the game shows "Bounty complete" over the

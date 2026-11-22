@@ -10,6 +10,8 @@ they are easier to see.
 Version 0.1.0, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
+![CursorColor settings in the Mods menu](../docs/CursorColor/settings.webp)
+
 ## What it does
 
 - The cursor takes the colour you choose: the arrow, and the sword,

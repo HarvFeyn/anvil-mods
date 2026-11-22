@@ -9,6 +9,10 @@ Changes the colours of player names in **Anvil Empires**.
 Version 0.1.1, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
+![NameColors settings in the Mods menu](../docs/NameColors/settings.webp)
+
+![A guild member's name in the chosen colour](../docs/NameColors/in-game.webp)
+
 ## What it does
 
 Pick your own colour for the names of:

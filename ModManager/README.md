@@ -10,6 +10,8 @@ main menu.
 Version 0.2.3, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
+![The Mods menu](../docs/ModManager/mods-menu.webp)
+
 ## What it does
 
 A **Mods** button appears in the main menu, above **Close Game**. It opens

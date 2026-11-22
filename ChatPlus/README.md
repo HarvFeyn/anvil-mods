@@ -9,6 +9,8 @@ Small improvements to the in-game chat of **Anvil Empires**.
 Version 0.1.0, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
+![Chat messages with their time](../docs/ChatPlus/chat.png)
+
 ## What it does
 
 Shows the time of each chat message in front of it, in grey:

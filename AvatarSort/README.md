@@ -10,6 +10,8 @@ skill on its tile.
 Version 0.3.0, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
+![Avatar list sorted by Melee, with the value/max labels](../docs/AvatarSort/avatar-list.png)
+
 ## What it does
 
 A row of buttons appears above every avatar list (town center, family

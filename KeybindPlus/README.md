@@ -13,6 +13,8 @@ An **accessibility** mod: it makes the game easier to play for players
 whose keyboard is not QWERTY (French AZERTY, for example), by letting them
 choose keys for shortcuts the game does not let them change.
 
+![Item Slot entries in the Keybinds menu](../docs/KeybindPlus/keybinds-menu.png)
+
 ## What it does
 
 The game's **Keybinds** menu (Options → Keybinds) does not list every
