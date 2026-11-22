@@ -30,7 +30,7 @@
 --]]
 
 -- Bump with each release (and tag the release vX.Y.Z on GitHub).
-local Version = "0.2.1"
+local Version = "0.2.2"
 
 local function Log(Format, ...)
     print("[QuickBounty] " .. string.format(Format, ...) .. "\n")
@@ -409,15 +409,73 @@ local ErrorShown = nil
 
 local Ticks = 0
 
--- Puts the final amount on the withdraw button instead of letting it count
--- up. Setting the text replaces the game's own text binding until the
--- window is built again, so it is kept up to date at every check.
+-- Shows the final amount beside the withdraw button instead of letting it
+-- count up. Until the build of 2026-11-22 the game's text was bound to
+-- GetWithdrawSilverText, and setting the text replaced the binding. That
+-- function is gone: the game now writes its counting text itself every
+-- frame, and setting it fought with the game (the amount flickered and
+-- stopped short). So the game's text is collapsed and a text of the mod's
+-- own, styled like it, takes its place in the same box. WithdrawLabel = its
+-- address, found again among the box's children.
+local WithdrawLabel = nil
+
+local function FindWithdrawLabel(Box)
+    if not WithdrawLabel then return nil end
+    for Index = 0, Box:GetChildrenCount() - 1 do
+        local Child = Box:GetChildAt(Index)
+        if IsSafe(Child) and Child:GetAddress() == WithdrawLabel then return Child end
+    end
+    return nil
+end
+
+local function NewWithdrawLabel(Window, Game, Box)
+    local Label = StaticConstructObject(StaticFindObject("/Script/UMG.TextBlock"), Window.WidgetTree)
+    pcall(function()
+        local Font = Game.Font
+        Label:SetFont({
+            FontObject = Font.FontObject,
+            FontMaterial = Font.FontMaterial,
+            TypefaceFontName = Font.TypefaceFontName,
+            Size = Font.Size,
+            LetterSpacing = Font.LetterSpacing,
+        })
+    end)
+    pcall(function()
+        local C = Game.ColorAndOpacity.SpecifiedColor
+        Label:SetColorAndOpacity({ SpecifiedColor = { R = C.R, G = C.G, B = C.B, A = C.A }, ColorUseRule = 0 })
+    end)
+    pcall(function()
+        local O, S = Game.ShadowOffset, Game.ShadowColorAndOpacity
+        Label:SetShadowOffset({ X = O.X, Y = O.Y })
+        Label:SetShadowColorAndOpacity({ R = S.R, G = S.G, B = S.B, A = S.A })
+    end)
+    Label:SetVisibility(SlateHitTestInvisible)
+    local Slot = Box:AddChild(Label)
+    -- The same place in the box as the game's text.
+    pcall(function()
+        local From = Game.Slot
+        local P = From.Padding
+        Slot:SetPadding({ Left = P.Left, Top = P.Top, Right = P.Right, Bottom = P.Bottom })
+        Slot:SetHorizontalAlignment(From.HorizontalAlignment)
+        Slot:SetVerticalAlignment(From.VerticalAlignment)
+        local Size = From.Size
+        Slot:SetSize({ Value = Size.Value, SizeRule = Size.SizeRule })
+    end)
+    WithdrawLabel = Label:GetAddress()
+    return Label
+end
+
 local function ShowFinalSilver(Window, Silver)
     if type(Silver) ~= "number" then return end
+    local Game = Window.WithdrawSilverText
+    if not IsSafe(Game) then return end
+    local Box = Game:GetParent()
+    if not IsSafe(Box) or ClassName(Box) ~= "HorizontalBox" then return end
+    local Label = FindWithdrawLabel(Box) or NewWithdrawLabel(Window, Game, Box)
+    if not IsSafe(Label) then return end
     local Text = string.format("%dx", Silver)
-    if ReadText(Window.WithdrawSilverText) ~= Text then
-        Window.WithdrawSilverText:SetText(FText(Text))
-    end
+    if ReadText(Label) ~= Text then Label:SetText(FText(Text)) end
+    if Game:GetVisibility() ~= SlateCollapsed then Game:SetVisibility(SlateCollapsed) end
 end
 
 ------------------------------------------------------------------------
@@ -660,6 +718,16 @@ end
 local PendingHandIn = nil
 local Ledger = {}
 
+-- The daily silver cap is not readable on the client (no reflected field
+-- or function, checked on the builds of 2026-11-20 and 22): the mod
+-- measures it. A hand-in of a bounty worth Silver moves the bar by
+-- Silver / cap, so cap = Silver / (bar after - bar before). LastBarPercent
+-- is the bar as last read; CapMeasure = { Silver, Before, At } for one
+-- confirmed hand-in whose bar change is awaited (Spoiled when a second
+-- hand-in came before it: the change would hold both).
+local LastBarPercent = nil
+local CapMeasure = nil
+
 OnHandInClicked = function(Context)
     local Entry = Context:get()
     if not IsSafe(Entry) then return end
@@ -667,7 +735,8 @@ OnHandInClicked = function(Context)
     if not Request then return end
     local Raw = {}
     for _, Copy in ipairs(ReadCopies()) do Raw[Copy.Id] = Copy.Here[Request.Icon] or 0 end
-    PendingHandIn = { Icon = Request.Icon, Count = Request.Count, Raw = Raw, At = os.clock() }
+    PendingHandIn = { Icon = Request.Icon, Count = Request.Count, Raw = Raw, At = os.clock(),
+        Silver = Request.Silver, BarBefore = LastBarPercent }
 end
 
 -- Called when the hand-in message is read: keep the note on success.
@@ -676,6 +745,11 @@ local function SettleHandIn(Success)
     if Success and os.clock() - PendingHandIn.At < 10 then
         Ledger[#Ledger + 1] = PendingHandIn
         Log("handed in %dx %s", PendingHandIn.Count, PendingHandIn.Icon)
+        if CapMeasure then
+            CapMeasure.Spoiled = true
+        elseif PendingHandIn.Silver and PendingHandIn.Silver > 0 and PendingHandIn.BarBefore then
+            CapMeasure = { Silver = PendingHandIn.Silver, Before = PendingHandIn.BarBefore, At = os.clock() }
+        end
     end
     PendingHandIn = nil
 end
@@ -922,18 +996,59 @@ end
 ------------------------------------------------------------------------
 -- Daily silver on the progress bar. Since the patch of 2026-11-19 the
 -- silver earned from bounties per day is capped (3000, per the patch
--- notes), and BountyProgressBar shows the share earned (0.167 = 500). The
+-- notes; measured again at each hand-in, see CapMeasure, and kept in
+-- dailycap.txt), and BountyProgressBar shows the share earned (0.167 = 500). The
 -- time the cycle restarts is not readable on the client
 -- (FBountyPlayerState is server data; DebugBountyRefreshTime is 0). The
 -- mod writes "500 / 3000 silver today" above the bar. SilverLabel = the
 -- plate's address, found again in the overlay holding the bar.
 ------------------------------------------------------------------------
 
-local DailySilverCap = 3000
+local DailySilverCap = 3000 -- until a hand-in measured it
+local CapPath = nil
+do
+    local Source = debug.getinfo(1, "S").source
+    local Folder = Source and string.match(Source, "^@(.*[\\/])Scripts[\\/][^\\/]+$")
+    if Folder then CapPath = Folder .. "dailycap.txt" end
+    local Handle = CapPath and io.open(CapPath, "r")
+    if Handle then
+        local Saved = tonumber(string.match(Handle:read("a") or "", "%d+") or "")
+        Handle:close()
+        if Saved and Saved >= 100 and Saved <= 1000000 then DailySilverCap = Saved end
+    end
+end
+
+-- Called with the bar's value at each update of the label.
+local function MeasureCap(Percent)
+    if CapMeasure and os.clock() - CapMeasure.At > 30 then CapMeasure = nil end
+    if not CapMeasure then return end
+    local Delta = Percent - CapMeasure.Before
+    if Delta <= 0.00005 then return end -- not moved yet
+    local Measure = CapMeasure
+    CapMeasure = nil
+    -- A full bar may be clamped, and two hand-ins in one change say nothing.
+    if Measure.Spoiled or Percent >= 0.999 then return end
+    local Cap = math.floor(Measure.Silver / Delta + 0.5)
+    if Cap < 100 or Cap > 1000000 then return end
+    Log("daily silver cap measured: %d (%d silver moved the bar by %.4f)%s", Cap, Measure.Silver, Delta,
+        Cap == DailySilverCap and ", as known" or string.format(", was %d", DailySilverCap))
+    if Cap ~= DailySilverCap then
+        DailySilverCap = Cap
+        local Handle = CapPath and io.open(CapPath, "w")
+        if Handle then
+            Handle:write(tostring(Cap) .. "\n")
+            Handle:close()
+        end
+    end
+end
+
 local SilverLabel = nil
 local SilverLabelLogged = false
 local SilverPlateHeight = 0 -- plate height the padding was set for
 local SilverPlateGap = 3 -- pixels between the plate and the bar
+local HintSlotKey = nil -- identity of the hint's slot the base padding is for
+local HintBaseBottom = 0 -- the game's bottom padding of that slot
+local HintLogged = false
 
 local function FindLabel(Overlay)
     if not SilverLabel or not IsSafe(Overlay) then return nil end
@@ -988,10 +1103,49 @@ local function BarOverlay(Bar)
     return nil
 end
 
+-- Opened from the bounty shortcut (away from a board), the window shows
+-- SubmitBountyHintText ("Bounties can be turned in at Keeps and Camps.")
+-- right above the bar, where the plate goes. While the hint is shown, its
+-- slot gets extra bottom padding of the plate's height, which moves the
+-- bar down; the game's own padding is put back when the hint is hidden.
+local function MakeRoomForPlate(Window)
+    local Hint = Window.SubmitBountyHintText
+    if not IsSafe(Hint) then return end
+    local Slot = Hint.Slot
+    if not IsSafe(Slot) then return end
+    local Ok, Padding = pcall(function()
+        local P = Slot.Padding
+        return { Left = P.Left, Top = P.Top, Right = P.Right, Bottom = P.Bottom }
+    end)
+    if not Ok or type(Padding) ~= "table" or type(Padding.Bottom) ~= "number" then
+        if not HintLogged then
+            HintLogged = true
+            Log("hint text slot (%s) has no padding: the plate may overlap it", ClassName(Slot))
+        end
+        return
+    end
+    local Key = Identity(Slot)
+    if Key ~= HintSlotKey then
+        HintSlotKey = Key
+        HintBaseBottom = Padding.Bottom
+    end
+    local Wanted = HintBaseBottom
+    if IsShown(Hint) and SilverPlateHeight > 0 then
+        Wanted = HintBaseBottom + SilverPlateHeight + SilverPlateGap + 2
+    end
+    if math.abs(Padding.Bottom - Wanted) > 0.5 then
+        Padding.Bottom = Wanted
+        Slot:SetPadding(Padding)
+    end
+end
+
 local function UpdateSilverLabel(Window)
     local Bar = Window.BountyProgressBar
     if not IsSafe(Bar) or not IsShown(Bar) then return end
-    local Earned = math.floor(Bar.Percent * DailySilverCap + 0.5)
+    local Percent = Bar.Percent
+    MeasureCap(Percent)
+    LastBarPercent = Percent
+    local Earned = math.floor(Percent * DailySilverCap + 0.5)
     local Text = string.format("%d / %d silver today", Earned, DailySilverCap)
     -- The text sits on a small dark rounded plate just above the bar's
     -- middle (white text on the gold fill was hard to read, and a plate
@@ -1036,6 +1190,7 @@ local function UpdateSilverLabel(Window)
         Plate.Slot:SetPadding({ Left = 0, Top = -(Height + SilverPlateGap), Right = 0, Bottom = 0 })
         Plate:SetRenderOpacity(1.0)
     end
+    MakeRoomForPlate(Window)
 end
 
 local function UpdateBoard(Window)
@@ -1253,6 +1408,10 @@ local function PollWindow()
         if next(Frames) ~= nil then Frames = {} end
         SilverLabel = nil
         SilverPlateHeight = 0
+        HintSlotKey = nil
+        WithdrawLabel = nil
+        LastBarPercent = nil
+        CapMeasure = nil
         if #Ledger > 0 then Ledger = {} end
         if next(CopyState) ~= nil then CopyState = {} end
         CopiesSeen = false

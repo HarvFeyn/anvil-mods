@@ -7,7 +7,7 @@ bounty board, and removes the pause after handing one in.
 · [How to install](../README.md#installation)
 · Author: [Feyn](https://github.com/HarvFeyn)
 
-Version 0.2.1, tested with the Anvil Empires playtest of November 2026 and
+Version 0.2.2, tested with the Anvil Empires playtest of November 2026 and
 `UE4SS_v3.0.1-1181-g83330635`.
 
 ## What it does
@@ -37,8 +37,11 @@ hand-in, the bounties you can no longer hand in lose their frame at once.
 **Daily silver**: since November 2026 the silver you can earn from bounties
 is capped at 3000 a day. The bar at the top of the board shows how much
 you have earned; QuickBounty writes the amount on it, for example
-`500 / 3000 silver today`. The game does not tell the client when the
-count restarts, so the mod cannot show that.
+`500 / 3000 silver today`. The game does not give the cap to the client:
+the mod works it out from how far the bar moves when you hand in a
+bounty, and remembers it, so it follows the game if the cap changes (until
+your first hand-in, it assumes 3000). The game does not tell the client
+when the count restarts either, so the mod cannot show that.
 
 ## What it does not do
 
